@@ -2,6 +2,9 @@
 """
 SQL Anywhere to Web API Sync Tool
 Connects to SQL Anywhere database via ODBC and syncs data to web API
+
+Updated: added DatabaseConnector.close() and context-manager support,
+and ensured cursors are always closed to avoid "'close' attribute" errors.
 """
 
 import json
@@ -43,7 +46,7 @@ class DatabaseConfig:
     @property
     def api_base_url(self): return self.config["api"]["base_url"]
     @property
-    def api_timeout(self): return self.config["api"].get("timeout", 120)  # Increased default to 120
+    def api_timeout(self): return self.config["api"].get("timeout", 120)
     @property
     def client_id(self): return self.config["settings"]["client_id"]
     @property
@@ -59,9 +62,12 @@ class DatabaseConfig:
 
 
 class DatabaseConnector:
+    """
+    Encapsulates the database connection. Provides safe connect/close and context-manager support.
+    """
     def __init__(self, config: DatabaseConfig):
         self.config = config
-        self.connection = None
+        self.connection: Optional[pyodbc.Connection] = None
 
     def connect(self) -> bool:
         try:
@@ -75,9 +81,49 @@ class DatabaseConnector:
             print(f"❌ Failed to connect to database: {e}")
             return False
 
-    def fetch_accttservicemaster(self) -> Optional[List[Dict[str, Any]]]:
+    def close(self):
+        """
+        Safely close the connection.
+        This method exists because earlier versions attempted to call it and it was missing.
+        """
         try:
-            cursor = self.connection.cursor()
+            if self.connection is not None:
+                try:
+                    self.connection.close()
+                    logging.info("🔒 Database connection closed")
+                except Exception as e:
+                    logging.warning(f"⚠️ Error while closing connection: {e}")
+                finally:
+                    self.connection = None
+            else:
+                logging.debug("DatabaseConnector.close() called but connection was already None")
+        except Exception as e:
+            logging.error(f"❌ Unexpected error in DatabaseConnector.close(): {e}")
+
+    # context manager support
+    def __enter__(self):
+        if not self.connection:
+            connected = self.connect()
+            if not connected:
+                raise RuntimeError("Could not connect to DB in context manager")
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        # Do not suppress exceptions
+        return False
+
+    # Helper to obtain a cursor safely
+    def _cursor(self):
+        if not self.connection:
+            raise RuntimeError("Attempted to get cursor on closed connection")
+        return self.connection.cursor()
+
+    # All fetch methods now try to close cursors after use
+    def fetch_accttservicemaster(self) -> Optional[List[Dict[str, Any]]]:
+        cursor = None
+        try:
+            cursor = self._cursor()
             query = """
                 SELECT slno, type, code, name
                 FROM dba.acc_tt_servicemaster
@@ -86,14 +132,23 @@ class DatabaseConnector:
             logging.info(f"Executing query: {query}")
             cursor.execute(query)
             columns = [column[0] for column in cursor.description]
-            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+            rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            return rows
         except Exception as e:
             logging.error(f"❌ Failed fetching acc_tt_servicemaster: {e}")
+            logging.error(traceback.format_exc())
             return None
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
 
     def fetch_users(self) -> Optional[List[Dict[str, Any]]]:
+        cursor = None
         try:
-            cursor = self.connection.cursor()
+            cursor = self._cursor()
             query = f"SELECT id, pass, role, accountcode FROM {self.config.table_name_users}"
             logging.info(f"Executing query: {query}")
             cursor.execute(query)
@@ -101,11 +156,19 @@ class DatabaseConnector:
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
         except Exception as e:
             logging.error(f"❌ Failed fetching users: {e}")
+            logging.error(traceback.format_exc())
             return None
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
 
     def fetch_misel(self) -> Optional[List[Dict[str, Any]]]:
+        cursor = None
         try:
-            cursor = self.connection.cursor()
+            cursor = self._cursor()
             query = f"SELECT firm_name, address, phones, mobile, address1, address2, address3, pagers, tinno FROM {self.config.table_name_misel}"
             logging.info(f"Executing query: {query}")
             cursor.execute(query)
@@ -113,15 +176,19 @@ class DatabaseConnector:
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
         except Exception as e:
             logging.error(f"❌ Failed fetching misel: {e}")
+            logging.error(traceback.format_exc())
             return None
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
 
     def fetch_acc_master(self) -> Optional[List[Dict[str, Any]]]:
-        """
-        Fetch acc_master records for DEBTO, SUNCR, CASH, BANK
-        Now includes super_code field
-        """
+        cursor = None
         try:
-            cursor = self.connection.cursor()
+            cursor = self._cursor()
             query = """
                 SELECT 
                     acc_master.code,
@@ -146,10 +213,8 @@ class DatabaseConnector:
             columns = [column[0] for column in cursor.description]
             results = [dict(zip(columns, row)) for row in cursor.fetchall()]
             
-            # Debug logging
             logging.info(f"📊 Fetched {len(results)} acc_master records")
             
-            # Count by super_code
             super_code_counts = {}
             for r in results:
                 sc = r.get('super_code', 'None')
@@ -157,30 +222,31 @@ class DatabaseConnector:
             
             logging.info(f"📈 Records by super_code: {super_code_counts}")
             
-            # Log area field statistics
             area_count = sum(1 for r in results if r.get('area') and str(r['area']).strip())
-            logging.info(f"🔍 Records with non-empty area field: {area_count}")
+            logging.info(f"📍 Records with non-empty area field: {area_count}")
             
             return results
         except Exception as e:
             logging.error(f"❌ Failed fetching acc_master: {e}")
-            logging.error(f"{traceback.format_exc()}")
+            logging.error(traceback.format_exc())
             return None
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
 
     def fetch_acc_ledgers(self) -> Optional[List[Dict[str, Any]]]:
-        """
-        Fetch acc_ledgers records for accounts with super_code IN ('DEBTO', 'SUNCR', 'CASH', 'BANK')
-        Now includes super_code field
-        """
+        cursor = None
         try:
-            cursor = self.connection.cursor()
+            cursor = self._cursor()
 
             logging.info("Checking acc_ledgers table structure...")
             cursor.execute("SELECT TOP 1 * FROM acc_ledgers")
             logging.info(f"acc_ledgers columns: {[col[0] for col in cursor.description]}")
             cursor.fetchall()
 
-            # Debug: log a few code samples
             logging.info("🧪 Debug: Sampling acc_master codes with super_code IN ('DEBTO', 'SUNCR', 'CASH', 'BANK')...")
             cursor.execute("SELECT TOP 5 code, super_code FROM acc_master WHERE super_code IN ('DEBTO', 'SUNCR', 'CASH', 'BANK')")
             for row in cursor.fetchall():
@@ -191,7 +257,6 @@ class DatabaseConnector:
             for row in cursor.fetchall():
                 logging.info(f"🔎 acc_ledgers code: [{row[0]}]")
 
-            # Use subquery with IN clause and include super_code
             query = """
                 SELECT
                     l.code,
@@ -213,7 +278,6 @@ class DatabaseConnector:
             columns = [col[0] for col in cursor.description]
             result = [dict(zip(columns, row)) for row in cursor.fetchall()]
             
-            # Log statistics by super_code
             super_code_counts = {}
             for r in result:
                 sc = r.get('super_code', 'None')
@@ -228,14 +292,18 @@ class DatabaseConnector:
             logging.error(f"❌ Critical error in fetch_acc_ledgers: {e}")
             logging.error(f"{traceback.format_exc()}")
             return None
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
 
     def fetch_acc_invmast(self) -> Optional[List[Dict[str, Any]]]:
+        cursor = None
         try:
-            cursor = self.connection.cursor()
-            
-            # Try different query variations for acc_invmast
+            cursor = self._cursor()
             queries_to_try = [
-                # Option 1: With DBA schema prefix
                 """
                 SELECT
                     inv.modeofpayment,
@@ -252,7 +320,6 @@ class DatabaseConnector:
                 AND inv.modeofpayment = 'C'
                 """,
                 
-                # Option 2: Without DBA schema prefix
                 """
                 SELECT
                     inv.modeofpayment,
@@ -287,11 +354,19 @@ class DatabaseConnector:
             
         except Exception as e:
             logging.error(f"❌ Failed fetching acc_invmast: {e}")
+            logging.error(traceback.format_exc())
             return None
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
 
     def fetch_cashandbankaccmaster(self) -> Optional[List[Dict[str, Any]]]:
+        cursor = None
         try:
-            cursor = self.connection.cursor()
+            cursor = self._cursor()
             query = """
                 SELECT code, name, super_code, opening_balance, opening_date, debit, credit
                 FROM acc_master
@@ -303,12 +378,82 @@ class DatabaseConnector:
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
         except Exception as e:
             logging.error(f"❌ Failed fetching cashandbankaccmaster: {e}")
+            logging.error(traceback.format_exc())
             return None
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
 
-    def close(self):
-        if self.connection:
-            self.connection.close()
-            logging.info("Database connection closed")
+    def fetch_sales_today(self) -> Optional[List[Dict[str, Any]]]:
+        """Fetch sales records from acc_invmast where billno > 0"""
+        cursor = None
+        try:
+            cursor = self._cursor()
+            query = """
+                SELECT 
+                    nettotal,
+                    billno,
+                    type,
+                    userid,
+                    invdate,
+                    customername
+                FROM acc_invmast
+                WHERE billno > 0
+                ORDER BY invdate DESC, billno DESC
+            """
+            logging.info(f"Executing sales_today query...")
+            cursor.execute(query)
+            columns = [column[0] for column in cursor.description]
+            result = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            logging.info(f"✅ Fetched {len(result)} sales_today records")
+            return result
+        except Exception as e:
+            logging.error(f"❌ Failed fetching sales_today: {e}")
+            logging.error(f"{traceback.format_exc()}")
+            return None
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+
+    def fetch_purchase_today(self) -> Optional[List[Dict[str, Any]]]:
+        """Fetch purchase records from acc_purchasemaster where billno > 0"""
+        cursor = None
+        try:
+            cursor = self._cursor()
+            query = """
+                SELECT 
+                    net,
+                    billno,
+                    pbillno,
+                    "date",
+                    total,
+                    suppliername
+                FROM acc_purchasemaster
+                WHERE billno > 0
+                ORDER BY "date" DESC, billno DESC
+            """
+            logging.info(f"Executing purchase_today query...")
+            cursor.execute(query)
+            columns = [column[0] for column in cursor.description]
+            result = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            logging.info(f"✅ Fetched {len(result)} purchase_today records")
+            return result
+        except Exception as e:
+            logging.error(f"❌ Failed fetching purchase_today: {e}")
+            logging.error(f"{traceback.format_exc()}")
+            return None
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
 
 
 class WebAPIClient:
@@ -320,6 +465,8 @@ class WebAPIClient:
     ENDPOINT_ACC_INVMAST = "/upload-acc-invmast/"
     ENDPOINT_CASH_BANK = "/upload-cashandbankaccmaster/"
     ENDPOINT_ACC_TT_SERVICE = "/upload-accttservicemaster/"
+    ENDPOINT_SALES_TODAY = "/upload-sales-today/"
+    ENDPOINT_PURCHASE_TODAY = "/upload-purchase-today/"
 
     def __init__(self, config: DatabaseConfig):
         self.config = config
@@ -342,7 +489,7 @@ class WebAPIClient:
                 logging.info("✅ acc_tt_servicemaster uploaded successfully")
                 return True
             else:
-                logging.error(f"❌ acc_tt_servicemaster upload failed: {res.status_code} – {res.text}")
+                logging.error(f"❌ acc_tt_servicemaster upload failed: {res.status_code} — {res.text}")
                 return False
         except Exception as e:
             logging.error(f"❌ Exception in upload_accttservicemaster: {e}")
@@ -377,20 +524,16 @@ class WebAPIClient:
             return False
 
     def upload_acc_master(self, acc_master: List[Dict[str, Any]]) -> bool:
-        """Upload acc_master with batching support for large datasets"""
         if not acc_master:
             logging.warning("No acc_master data to upload")
             return True
         
-        # Use batching for large datasets (> 1000 records)
         if len(acc_master) > 1000:
             logging.info(f"📦 Large dataset detected ({len(acc_master)} records). Using batch upload...")
             return self._upload_in_batches_with_clear('acc_master', acc_master, batch_size=200)
         
-        # For smaller datasets, use single upload
         url = f"{self.config.api_base_url}{self.ENDPOINT_ACC_MASTER}?client_id={self.config.client_id}&force_clear=true"
         try:
-            # Clear existing data first
             logging.info("🧹 Clearing existing acc_master data...")
             clear_res = self.session.post(url, json=[], timeout=60)
             
@@ -398,7 +541,6 @@ class WebAPIClient:
                 logging.error(f"❌ Failed to clear existing acc_master data: {clear_res.status_code} - {clear_res.text}")
                 return False
             
-            # Upload new data with extended timeout
             logging.info(f"📤 Uploading {len(acc_master)} acc_master records...")
             res = self.session.post(url, json=acc_master, timeout=120)
             
@@ -414,11 +556,9 @@ class WebAPIClient:
             return False
 
     def _upload_in_batches_with_clear(self, table_name: str, data: List[Dict[str, Any]], batch_size: int = 500) -> bool:
-        """Upload large datasets in batches with initial clear operation"""
         if not data:
             return True
         
-        # Map table names to endpoints
         endpoint_map = {
             'acc_master': self.ENDPOINT_ACC_MASTER,
             'acc_ledgers': self.ENDPOINT_ACC_LEDGERS,
@@ -429,7 +569,6 @@ class WebAPIClient:
         total_records = len(data)
         url = f"{self.config.api_base_url}{endpoint}?client_id={self.config.client_id}"
         
-        # Clear existing data first
         try:
             logging.info(f"🧹 Clearing existing {table_name} data...")
             clear_url = f"{url}&force_clear=true"
@@ -441,7 +580,6 @@ class WebAPIClient:
             logging.error(f"❌ Exception clearing data: {e}")
             return False
         
-        # Process in batches
         success_count = 0
         for i in range(0, total_records, batch_size):
             batch = data[i:i + batch_size]
@@ -451,14 +589,11 @@ class WebAPIClient:
             try:
                 logging.info(f"📤 Uploading {table_name} batch {batch_num}/{total_batches} ({len(batch)} records)")
                 
-                # Calculate timeout based on batch size and table type
-                # acc_master needs more time per record due to complex joins/indexes
                 if table_name == 'acc_master':
-                    timeout = min(240, max(120, len(batch) * 0.5))  # 0.5s per record, min 120s, max 240s
+                    timeout = min(240, max(120, int(len(batch) * 0.5)))
                 else:
-                    timeout = min(180, max(60, len(batch) // 5))
+                    timeout = min(180, max(60, int(len(batch) // 5)))
                 
-                # Use append=true for subsequent batches
                 batch_url = f"{url}&append=true" if i > 0 else url
                 
                 res = self.session.post(batch_url, json=batch, timeout=timeout)
@@ -478,14 +613,12 @@ class WebAPIClient:
         return True
 
     def _upload_in_batches(self, endpoint_key: str, data: List[Dict[str, Any]], batch_size: int = None) -> bool:
-        """Upload large datasets in batches to avoid timeouts"""
         if not data:
             return True
         
         if batch_size is None:
             batch_size = self.config.batch_size
         
-        # Map endpoint keys to actual endpoints
         endpoint_map = {
             'acc_ledgers': self.ENDPOINT_ACC_LEDGERS,
             'acc_invmast': self.ENDPOINT_ACC_INVMAST
@@ -495,7 +628,6 @@ class WebAPIClient:
         total_records = len(data)
         url = f"{self.config.api_base_url}{endpoint}?client_id={self.config.client_id}"
         
-        # For large datasets, clear existing data first with empty batch
         if total_records > batch_size:
             try:
                 logging.info(f"🧹 Clearing existing {endpoint_key} data...")
@@ -505,7 +637,6 @@ class WebAPIClient:
             except Exception as e:
                 logging.error(f"❌ Exception clearing data: {e}")
         
-        # Process in batches
         success_count = 0
         for i in range(0, total_records, batch_size):
             batch = data[i:i + batch_size]
@@ -515,8 +646,7 @@ class WebAPIClient:
             try:
                 logging.info(f"📤 Uploading {endpoint_key} batch {batch_num}/{total_batches} ({len(batch)} records)")
                 
-                # Calculate timeout based on batch size
-                timeout = min(180, max(60, len(batch) // 5))
+                timeout = min(180, max(60, int(len(batch) // 5)))
                 
                 batch_url = url
                 if total_records > batch_size and i > 0:
@@ -542,17 +672,14 @@ class WebAPIClient:
         return self._upload_in_batches('acc_ledgers', acc_ledgers, self.config.large_table_batch_size)
 
     def upload_acc_invmast(self, acc_invmast: List[Dict[str, Any]]) -> bool:
-        """Upload acc_invmast with batching for large datasets"""
         if not acc_invmast:
             logging.warning("No acc_invmast data to upload")
             return True
         
-        # Use batching for datasets > 1000 records
         if len(acc_invmast) > 1000:
-            logging.info(f"📦 Large dataset detected ({len(acc_invmast)} records). Using batch upload...")
+            logging.info(f"📦 Large dataset detected ({len(acc_invmast)} records). Using batch upload...") 
             return self._upload_in_batches_with_clear('acc_invmast', acc_invmast, batch_size=500)
         
-        # For smaller datasets, use single upload with extended timeout
         url = f"{self.config.api_base_url}{self.ENDPOINT_ACC_INVMAST}?client_id={self.config.client_id}"
         try:
             res = self.session.post(url, json=acc_invmast, timeout=120)
@@ -569,16 +696,13 @@ class WebAPIClient:
     def upload_cashandbankaccmaster(self, cashandbankaccmaster: List[Dict[str, Any]]) -> bool:
         url = f"{self.config.api_base_url}{self.ENDPOINT_CASH_BANK}?client_id={self.config.client_id}"
         try:
-            # Clear existing data first to avoid duplicate key errors
             logging.info("🧹 Clearing existing cashandbankaccmaster data...")
             clear_url = f"{url}&force_clear=true"
             clear_res = self.session.post(clear_url, json=[], timeout=60)
             
             if clear_res.status_code not in [200, 201]:
                 logging.error(f"❌ Failed to clear existing data: {clear_res.status_code} - {clear_res.text}")
-                # Continue anyway, the view might handle it
             
-            # Upload new data
             res = self.session.post(url, json=cashandbankaccmaster, timeout=self.config.api_timeout)
             if res.status_code in [200, 201]:
                 logging.info("✅ CashAndBankAccMaster uploaded successfully")
@@ -590,29 +714,63 @@ class WebAPIClient:
             logging.error(f"❌ Exception in upload_cashandbankaccmaster: {e}")
             return False
 
+    def upload_sales_today(self, sales_today: List[Dict[str, Any]]) -> bool:
+        """Upload sales_today records"""
+        url = f"{self.config.api_base_url}{self.ENDPOINT_SALES_TODAY}?client_id={self.config.client_id}"
+        try:
+            res = self.session.post(url, json=sales_today, timeout=self.config.api_timeout)
+            if res.status_code in [200, 201]:
+                logging.info("✅ Sales_Today uploaded successfully")
+                return True
+            else:
+                logging.error(f"❌ Upload failed: {res.status_code} - {res.text}")
+                return False
+        except Exception as e:
+            logging.error(f"❌ Exception in upload_sales_today: {e}")
+            return False
+
+    def upload_purchase_today(self, purchase_today: List[Dict[str, Any]]) -> bool:
+        """Upload purchase_today records"""
+        url = f"{self.config.api_base_url}{self.ENDPOINT_PURCHASE_TODAY}?client_id={self.config.client_id}"
+        try:
+            res = self.session.post(url, json=purchase_today, timeout=self.config.api_timeout)
+            if res.status_code in [200, 201]:
+                logging.info("✅ Purchase_Today uploaded successfully")
+                return True
+            else:
+                logging.error(f"❌ Upload failed: {res.status_code} - {res.text}")
+                return False
+        except Exception as e:
+            logging.error(f"❌ Exception in upload_purchase_today: {e}")
+            return False
+
 
 class SyncTool:
     def __init__(self):
-        self.config = None
-        self.db_connector = None
-        self.api_client = None
-        self._setup_logging()
+        self.config: Optional[DatabaseConfig] = None
+        self.db_connector: Optional[DatabaseConnector] = None
+        self.api_client: Optional[WebAPIClient] = None
+        # Setup minimal logging; after config loaded we'll reset if needed
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
+        logging.info("=== SQL Anywhere Sync Tool Started ===")
 
     def _setup_logging(self):
         level = logging.INFO
         if self.config and self.config.log_level:
             level = getattr(logging, self.config.log_level.upper(), logging.INFO)
-        logging.basicConfig(level=level, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
-        logging.info("=== SQL Anywhere Sync Tool Started ===")
+        logging.getLogger().setLevel(level)
 
     def initialize(self) -> bool:
         try:
             self.config = DatabaseConfig()
+            # Reset logging level based on config
+            self._setup_logging()
             self.db_connector = DatabaseConnector(self.config)
             self.api_client = WebAPIClient(self.config)
             return True
         except Exception as e:
             logging.error(f"Initialization failed: {e}")
+            logging.error(traceback.format_exc())
             return False
 
     def validate_accttservicemaster_data(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -661,22 +819,17 @@ class SyncTool:
         return valid
 
     def validate_acc_master_data(self, acc_master: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Validate acc_master data - now includes super_code field
-        """
         valid = []
         for i, m in enumerate(acc_master):
             if not m.get('code'):
                 continue
             
-            # Handle area field properly
             area_value = m.get('area', '')
             if area_value and area_value != 'No Area':
                 area_clean = str(area_value).strip()
             else:
                 area_clean = None
             
-            # Handle super_code field
             super_code = str(m.get('super_code', '')).strip() if m.get('super_code') else None
             
             validated_record = {
@@ -694,7 +847,6 @@ class SyncTool:
             
             valid.append(validated_record)
             
-        # Debug logging
         area_count = sum(1 for r in valid if r.get('area'))
         super_code_counts = {}
         for r in valid:
@@ -707,9 +859,6 @@ class SyncTool:
         return valid
 
     def validate_acc_ledgers_data(self, acc_ledgers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Validate acc_ledgers data - now includes super_code field
-        """
         valid = []
         for i, l in enumerate(acc_ledgers):
             if not l.get('code'):
@@ -764,7 +913,6 @@ class SyncTool:
             except (ValueError, TypeError):
                 credit = None
             
-            # Handle super_code field
             super_code = str(l.get('super_code', '')).strip() if l.get('super_code') else None
             
             valid.append({
@@ -779,7 +927,6 @@ class SyncTool:
                 'super_code': super_code
             })
         
-        # Debug logging
         super_code_counts = {}
         for r in valid:
             sc = r.get('super_code', 'None')
@@ -843,6 +990,75 @@ class SyncTool:
             })
         return valid
 
+    def validate_sales_today_data(self, sales_today: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Validate sales_today data"""
+        valid = []
+        for i, s in enumerate(sales_today):
+            invdate = None
+            if s.get('invdate'):
+                try:
+                    if hasattr(s['invdate'], 'strftime'):
+                        invdate = s['invdate'].strftime('%Y-%m-%d')
+                    else:
+                        invdate = str(s['invdate'])
+                except Exception:
+                    invdate = None
+            
+            nettotal = None
+            try:
+                if s.get('nettotal') is not None:
+                    nettotal = float(s['nettotal'])
+            except (ValueError, TypeError):
+                nettotal = None
+            
+            valid.append({
+                'nettotal': nettotal,
+                'billno': int(s['billno']) if s.get('billno') else None,
+                'type': s.get('type', ''),
+                'userid': s.get('userid', ''),
+                'invdate': invdate,
+                'customername': s.get('customername', '')
+            })
+        return valid
+
+    def validate_purchase_today_data(self, purchase_today: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Validate purchase_today data"""
+        valid = []
+        for i, p in enumerate(purchase_today):
+            date = None
+            if p.get('date'):
+                try:
+                    if hasattr(p['date'], 'strftime'):
+                        date = p['date'].strftime('%Y-%m-%d')
+                    else:
+                        date = str(p['date'])
+                except Exception:
+                    date = None
+            
+            net = None
+            total = None
+            try:
+                if p.get('net') is not None:
+                    net = float(p['net'])
+            except (ValueError, TypeError):
+                net = None
+                
+            try:
+                if p.get('total') is not None:
+                    total = float(p['total'])
+            except (ValueError, TypeError):
+                total = None
+            
+            valid.append({
+                'net': net,
+                'billno': int(p['billno']) if p.get('billno') else None,
+                'pbillno': int(p['pbillno']) if p.get('pbillno') else None,
+                'date': date,
+                'total': total,
+                'suppliername': p.get('suppliername', '')
+            })
+        return valid
+
     def run(self) -> bool:
         print("🔄 Starting SQL Anywhere to Web API sync...")
         if not self.initialize():
@@ -870,13 +1086,12 @@ class SyncTool:
             else:
                 print("❌ No valid misel data")
 
-        # Sync AccMaster (with super_code field)
+        # Sync AccMaster
         acc_master = self.db_connector.fetch_acc_master()
         if acc_master:
             print(f"📊 Found {len(acc_master)} acc_master entries")
             valid_acc_master = self.validate_acc_master_data(acc_master)
             if valid_acc_master:
-                # Log statistics
                 super_code_counts = {}
                 for r in valid_acc_master:
                     sc = r.get('super_code', 'None')
@@ -889,23 +1104,24 @@ class SyncTool:
                 
                 if area_records:
                     sample_areas = [r['area'] for r in area_records[:5]]
-                    print(f"🔍 Sample area values: {sample_areas}")
+                    print(f"📍 Sample area values: {sample_areas}")
                 
-                # CRITICAL: Stop if acc_master upload fails
                 if not self.api_client.upload_acc_master(valid_acc_master):
                     print("❌ CRITICAL: acc_master upload failed! Stopping sync.")
-                    self.db_connector.close()
+                    try:
+                        self.db_connector.close()
+                    except Exception:
+                        pass
                     return False
             else:
                 print("❌ No valid acc_master data")
 
-        # Sync AccLedgers (with super_code field)
+        # Sync AccLedgers
         acc_ledgers = self.db_connector.fetch_acc_ledgers()
         if acc_ledgers is not None:
             if acc_ledgers:
                 print(f"📊 Found {len(acc_ledgers)} acc_ledgers entries")
                 
-                # Log statistics by super_code
                 super_code_counts = {}
                 for r in acc_ledgers:
                     sc = r.get('super_code', 'None')
@@ -957,7 +1173,41 @@ class SyncTool:
             else:
                 print("❌ No valid acc_tt_servicemaster data")
 
-        self.db_connector.close()
+        # Sync Sales Today
+        sales_today = self.db_connector.fetch_sales_today()
+        if sales_today is not None:
+            if sales_today:
+                print(f"📊 Found {len(sales_today)} sales_today entries")
+                valid_sales_today = self.validate_sales_today_data(sales_today)
+                if valid_sales_today:
+                    self.api_client.upload_sales_today(valid_sales_today)
+                else:
+                    print("❌ No valid sales_today data")
+            else:
+                print("📊 Found 0 sales_today entries")
+        else:
+            print("❌ Failed to fetch sales_today data")
+
+        # Sync Purchase Today
+        purchase_today = self.db_connector.fetch_purchase_today()
+        if purchase_today is not None:
+            if purchase_today:
+                print(f"📊 Found {len(purchase_today)} purchase_today entries")
+                valid_purchase_today = self.validate_purchase_today_data(purchase_today)
+                if valid_purchase_today:
+                    self.api_client.upload_purchase_today(valid_purchase_today)
+                else:
+                    print("❌ No valid purchase_today data")
+            else:
+                print("📊 Found 0 purchase_today entries")
+        else:
+            print("❌ Failed to fetch purchase_today data")
+
+        # Ensure DB connection closed
+        try:
+            self.db_connector.close()
+        except Exception:
+            pass
         return True
 
     def run_interactive(self):
