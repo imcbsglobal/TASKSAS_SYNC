@@ -388,9 +388,24 @@ class DatabaseConnector:
                     pass
 
     def fetch_sales_today(self) -> Optional[List[Dict[str, Any]]]:
-        """Fetch sales records from acc_invmast where billno > 0"""
+        """Fetch sales records from acc_invmast where billno > 0 AND invdate == today's date (Asia/Kolkata)"""
         cursor = None
         try:
+            # determine today's date in Asia/Kolkata
+            try:
+                from zoneinfo import ZoneInfo
+                tz = ZoneInfo('Asia/Kolkata')
+                today = datetime.now(tz).date()
+            except Exception:
+                # fallback to pytz-like interface if zoneinfo not available
+                try:
+                    from pytz import timezone
+                    tz = timezone('Asia/Kolkata')
+                    today = datetime.now(tz).date()
+                except Exception:
+                    # final fallback to naive UTC date (not ideal)
+                    today = datetime.utcnow().date()
+
             cursor = self._cursor()
             query = """
                 SELECT 
@@ -402,13 +417,14 @@ class DatabaseConnector:
                     customername
                 FROM acc_invmast
                 WHERE billno > 0
+                AND invdate = ?
                 ORDER BY invdate DESC, billno DESC
             """
-            logging.info(f"Executing sales_today query...")
-            cursor.execute(query)
+            logging.info(f"Executing sales_today query for date={today.isoformat()}...")
+            cursor.execute(query, (today,))
             columns = [column[0] for column in cursor.description]
             result = [dict(zip(columns, row)) for row in cursor.fetchall()]
-            logging.info(f"✅ Fetched {len(result)} sales_today records")
+            logging.info(f"✅ Fetched {len(result)} sales_today records for {today.isoformat()}")
             return result
         except Exception as e:
             logging.error(f"❌ Failed fetching sales_today: {e}")
@@ -422,9 +438,24 @@ class DatabaseConnector:
                     pass
 
     def fetch_purchase_today(self) -> Optional[List[Dict[str, Any]]]:
-        """Fetch purchase records from acc_purchasemaster where billno > 0"""
+        """Fetch purchase records from acc_purchasemaster where billno > 0 AND date == today's date (Asia/Kolkata)"""
         cursor = None
         try:
+            # determine today's date in Asia/Kolkata
+            try:
+                from zoneinfo import ZoneInfo
+                tz = ZoneInfo('Asia/Kolkata')
+                today = datetime.now(tz).date()
+            except Exception:
+                # fallback to pytz-like interface if zoneinfo not available
+                try:
+                    from pytz import timezone
+                    tz = timezone('Asia/Kolkata')
+                    today = datetime.now(tz).date()
+                except Exception:
+                    # final fallback to naive UTC date (not ideal)
+                    today = datetime.utcnow().date()
+
             cursor = self._cursor()
             query = """
                 SELECT 
@@ -436,13 +467,14 @@ class DatabaseConnector:
                     suppliername
                 FROM acc_purchasemaster
                 WHERE billno > 0
+                AND "date" = ?
                 ORDER BY "date" DESC, billno DESC
             """
-            logging.info(f"Executing purchase_today query...")
-            cursor.execute(query)
+            logging.info(f"Executing purchase_today query for date={today.isoformat()}...")
+            cursor.execute(query, (today,))
             columns = [column[0] for column in cursor.description]
             result = [dict(zip(columns, row)) for row in cursor.fetchall()]
-            logging.info(f"✅ Fetched {len(result)} purchase_today records")
+            logging.info(f"✅ Fetched {len(result)} purchase_today records for {today.isoformat()}")
             return result
         except Exception as e:
             logging.error(f"❌ Failed fetching purchase_today: {e}")
