@@ -441,7 +441,7 @@ class DatabaseConnector:
         """Fetch purchase records from acc_purchasemaster where billno > 0 AND date == today's date (Asia/Kolkata)"""
         cursor = None
         try:
-            # determine today's date in Asia/Kolkata
+            # determine today's date in Asia/Kolkataa
             try:
                 from zoneinfo import ZoneInfo
                 tz = ZoneInfo('Asia/Kolkata')
