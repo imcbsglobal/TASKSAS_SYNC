@@ -1,28 +1,20 @@
+
 {
   "database": {
-    "dsn": "SYSMAC",
+    "dsn": "OMEGA",
     "username": "DBA",
     "password": "(*$^)"
   },
   "api": {
-    "base_url": "https://taskwebsyncapi.imcbs.com/api",
-    "upload_endpoints": {
-      "users": "/upload-users/",
-      "misel": "/upload-misel/",
-      "acc_master": "/upload-acc-master/",
-      "acc_ledgers": "/upload-acc-ledgers/",
-      "acc_invmast": "/upload-acc-invmast/",
-      "cashandbankaccmaster": "/upload-cashandbankaccmaster/",
-      "acc_tt_servicemaster": "/upload-accttservicemaster/"
-    },
-    "timeout": 30
+    "base_url": "https://taskwebsyncapi.imcbs.com//api",
+    "timeout": 120
   },
   "settings": {
     "client_id": "SYSMAC",
     "table_name_users": "acc_users",
     "table_name_misel": "misel",
     "batch_size": 1000,
-    "large_table_batch_size": 1000,
+    "large_table_batch_size": 500,
     "log_level": "INFO"
   }
 }

@@ -240,6 +240,24 @@ class DatabaseConnector:
     def fetch_acc_ledgers(self) -> Optional[List[Dict[str, Any]]]:
         cursor = None
         try:
+            # Calculate date 15 days ago in Asia/Kolkata timezone
+            try:
+                from zoneinfo import ZoneInfo
+                tz = ZoneInfo('Asia/Kolkata')
+                today = datetime.now(tz).date()
+            except Exception:
+                try:
+                    from pytz import timezone
+                    tz = timezone('Asia/Kolkata')
+                    today = datetime.now(tz).date()
+                except Exception:
+                    today = datetime.utcnow().date()
+            
+            from datetime import timedelta
+            fifteen_days_ago = today - timedelta(days=15)
+            
+            logging.info(f"📅 Fetching acc_ledgers from {fifteen_days_ago.isoformat()} to {today.isoformat()}")
+            
             cursor = self._cursor()
 
             logging.info("Checking acc_ledgers table structure...")
@@ -247,16 +265,13 @@ class DatabaseConnector:
             logging.info(f"acc_ledgers columns: {[col[0] for col in cursor.description]}")
             cursor.fetchall()
 
-            logging.info("🧪 Debug: Sampling acc_master codes with super_code IN ('DEBTO', 'SUNCR', 'CASH', 'BANK')...")
-            cursor.execute("SELECT TOP 5 code, super_code FROM acc_master WHERE super_code IN ('DEBTO', 'SUNCR', 'CASH', 'BANK')")
+            # Debug: Check if voucher_no exists and sample some values
+            logging.info("🧪 Debug: Sampling voucher_no values from acc_ledgers...")
+            cursor.execute("SELECT TOP 10 code, voucher_no FROM acc_ledgers WHERE voucher_no IS NOT NULL")
             for row in cursor.fetchall():
-                logging.info(f"🔎 acc_master - code: [{row[0]}], super_code: [{row[1]}]")
+                logging.info(f"🔎 Sample - code: [{row[0]}], voucher_no: [{row[1]}] (type: {type(row[1])})")
 
-            logging.info("🧪 Debug: Sampling acc_ledgers codes...")
-            cursor.execute("SELECT TOP 5 code FROM acc_ledgers")
-            for row in cursor.fetchall():
-                logging.info(f"🔎 acc_ledgers code: [{row[0]}]")
-
+            # Main query with date filter for CASH and BANK
             query = """
                 SELECT
                     l.code,
@@ -271,17 +286,51 @@ class DatabaseConnector:
                 FROM acc_ledgers l
                 INNER JOIN acc_master m ON TRIM(l.code) = TRIM(m.code)
                 WHERE TRIM(m.super_code) IN ('DEBTO', 'SUNCR', 'CASH', 'BANK')
+                AND (
+                    -- For CASH and BANK: only last 15 days
+                    (TRIM(m.super_code) IN ('CASH', 'BANK') AND l."date" >= ?)
+                    OR
+                    -- For DEBTO and SUNCR: all records
+                    (TRIM(m.super_code) IN ('DEBTO', 'SUNCR'))
+                )
             """
 
-            logging.info("Executing acc_ledgers query with super_code filter...")
-            cursor.execute(query)
+            logging.info("Executing acc_ledgers query with super_code and date filter...")
+            logging.info(f"🔍 Date filter: CASH/BANK records >= {fifteen_days_ago.isoformat()}")
+            cursor.execute(query, (fifteen_days_ago,))
             columns = [col[0] for col in cursor.description]
             result = [dict(zip(columns, row)) for row in cursor.fetchall()]
             
+            # Debug: Check voucher_no in results
+            voucher_no_stats = {
+                'null': 0,
+                'not_null': 0,
+                'sample_values': []
+            }
+            for r in result[:10]:  # Sample first 10
+                if r.get('voucher_no') is None:
+                    voucher_no_stats['null'] += 1
+                else:
+                    voucher_no_stats['not_null'] += 1
+                    voucher_no_stats['sample_values'].append(r.get('voucher_no'))
+            
+            logging.info(f"📊 Voucher_no stats - NULL: {voucher_no_stats['null']}, NOT NULL: {voucher_no_stats['not_null']}")
+            logging.info(f"📊 Sample voucher_no values: {voucher_no_stats['sample_values']}")
+            
+            # Statistics by super_code
             super_code_counts = {}
             for r in result:
                 sc = r.get('super_code', 'None')
                 super_code_counts[sc] = super_code_counts.get(sc, 0) + 1
+            
+            # Date range statistics for CASH and BANK
+            cash_bank_records = [r for r in result if r.get('super_code') in ('CASH', 'BANK')]
+            if cash_bank_records:
+                dates_with_data = [r.get('entry_date') for r in cash_bank_records if r.get('entry_date')]
+                if dates_with_data:
+                    min_date = min(dates_with_data)
+                    max_date = max(dates_with_data)
+                    logging.info(f"📅 CASH/BANK date range: {min_date} to {max_date}")
             
             logging.info(f"✅ Query succeeded! Returned {len(result)} records")
             logging.info(f"📈 Records by super_code: {super_code_counts}")
@@ -890,12 +939,16 @@ class SyncTool:
         
         return valid
 
+    
     def validate_acc_ledgers_data(self, acc_ledgers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         valid = []
+        voucher_errors = []
+        
         for i, l in enumerate(acc_ledgers):
             if not l.get('code'):
                 continue
             
+            # Handle entry_date
             entry_date = None
             if l.get('entry_date'):
                 try:
@@ -920,17 +973,37 @@ class SyncTool:
                     logging.warning(f"Could not parse date {l['entry_date']}: {date_e}")
                     entry_date = None
             
+            # Handle voucher_no with better error tracking
             voucher_no = None
-            if l.get('voucher_no') is not None:
+            raw_voucher = l.get('voucher_no')
+            
+            if raw_voucher is not None:
                 try:
-                    if isinstance(l['voucher_no'], (int, float)):
-                        voucher_no = int(l['voucher_no'])
-                    elif isinstance(l['voucher_no'], str) and l['voucher_no'].strip():
-                        voucher_no = int(float(l['voucher_no'].strip()))
+                    # Handle different types
+                    if isinstance(raw_voucher, int):
+                        voucher_no = raw_voucher
+                    elif isinstance(raw_voucher, float):
+                        voucher_no = int(raw_voucher)
+                    elif isinstance(raw_voucher, str):
+                        cleaned = raw_voucher.strip()
+                        if cleaned:
+                            # Try to convert string to int
+                            voucher_no = int(float(cleaned))
+                    else:
+                        # Try direct conversion for other types
+                        voucher_no = int(raw_voucher)
+                        
                 except (ValueError, TypeError) as voucher_e:
-                    logging.warning(f"Could not parse voucher_no {l['voucher_no']}: {voucher_e}")
+                    voucher_errors.append({
+                        'index': i,
+                        'code': l.get('code'),
+                        'raw_value': raw_voucher,
+                        'type': type(raw_voucher).__name__,
+                        'error': str(voucher_e)
+                    })
                     voucher_no = None
             
+            # Handle debit and credit
             debit = None
             credit = None
             try:
@@ -959,6 +1032,24 @@ class SyncTool:
                 'super_code': super_code
             })
         
+        # Log voucher_no statistics
+        voucher_stats = {
+            'total_records': len(valid),
+            'with_voucher_no': sum(1 for r in valid if r.get('voucher_no') is not None),
+            'without_voucher_no': sum(1 for r in valid if r.get('voucher_no') is None),
+            'conversion_errors': len(voucher_errors)
+        }
+        
+        logging.info(f"📊 Voucher_no validation stats: {voucher_stats}")
+        
+        if voucher_errors:
+            logging.warning(f"⚠️ Found {len(voucher_errors)} voucher_no conversion errors")
+            # Log first 5 errors as examples
+            for err in voucher_errors[:5]:
+                logging.warning(f"  - Record {err['index']}, code={err['code']}: "
+                            f"value={err['raw_value']} (type={err['type']}), error={err['error']}")
+        
+        # Log super_code distribution
         super_code_counts = {}
         for r in valid:
             sc = r.get('super_code', 'None')
