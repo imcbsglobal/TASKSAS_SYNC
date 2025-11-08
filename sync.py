@@ -3,8 +3,7 @@
 SQL Anywhere to Web API Sync Tool
 Connects to SQL Anywhere database via ODBC and syncs data to web API
 
-Updated: added DatabaseConnector.close() and context-manager support,
-and ensured cursors are always closed to avoid "'close' attribute" errors.
+Updated: Added sales_daywise and sales_monthwise sync functionality
 """
 
 import json
@@ -84,7 +83,6 @@ class DatabaseConnector:
     def close(self):
         """
         Safely close the connection.
-        This method exists because earlier versions attempted to call it and it was missing.
         """
         try:
             if self.connection is not None:
@@ -100,7 +98,6 @@ class DatabaseConnector:
         except Exception as e:
             logging.error(f"❌ Unexpected error in DatabaseConnector.close(): {e}")
 
-    # context manager support
     def __enter__(self):
         if not self.connection:
             connected = self.connect()
@@ -110,16 +107,13 @@ class DatabaseConnector:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
-        # Do not suppress exceptions
         return False
 
-    # Helper to obtain a cursor safely
     def _cursor(self):
         if not self.connection:
             raise RuntimeError("Attempted to get cursor on closed connection")
         return self.connection.cursor()
 
-    # All fetch methods now try to close cursors after use
     def fetch_accttservicemaster(self) -> Optional[List[Dict[str, Any]]]:
         cursor = None
         try:
@@ -240,7 +234,6 @@ class DatabaseConnector:
     def fetch_acc_ledgers(self) -> Optional[List[Dict[str, Any]]]:
         cursor = None
         try:
-            # Calculate date 15 days ago in Asia/Kolkata timezone
             try:
                 from zoneinfo import ZoneInfo
                 tz = ZoneInfo('Asia/Kolkata')
@@ -265,13 +258,11 @@ class DatabaseConnector:
             logging.info(f"acc_ledgers columns: {[col[0] for col in cursor.description]}")
             cursor.fetchall()
 
-            # Debug: Check if voucher_no exists and sample some values
             logging.info("🧪 Debug: Sampling voucher_no values from acc_ledgers...")
             cursor.execute("SELECT TOP 10 code, voucher_no FROM acc_ledgers WHERE voucher_no IS NOT NULL")
             for row in cursor.fetchall():
                 logging.info(f"🔎 Sample - code: [{row[0]}], voucher_no: [{row[1]}] (type: {type(row[1])})")
 
-            # Main query with date filter for CASH and BANK
             query = """
                 SELECT
                     l.code,
@@ -287,27 +278,24 @@ class DatabaseConnector:
                 INNER JOIN acc_master m ON TRIM(l.code) = TRIM(m.code)
                 WHERE TRIM(m.super_code) IN ('DEBTO', 'SUNCR', 'CASH', 'BANK')
                 AND (
-                    -- For CASH and BANK: only last 15 days
                     (TRIM(m.super_code) IN ('CASH', 'BANK') AND l."date" >= ?)
                     OR
-                    -- For DEBTO and SUNCR: all records
                     (TRIM(m.super_code) IN ('DEBTO', 'SUNCR'))
                 )
             """
 
             logging.info("Executing acc_ledgers query with super_code and date filter...")
-            logging.info(f"🔍 Date filter: CASH/BANK records >= {fifteen_days_ago.isoformat()}")
+            logging.info(f"📍 Date filter: CASH/BANK records >= {fifteen_days_ago.isoformat()}")
             cursor.execute(query, (fifteen_days_ago,))
             columns = [col[0] for col in cursor.description]
             result = [dict(zip(columns, row)) for row in cursor.fetchall()]
             
-            # Debug: Check voucher_no in results
             voucher_no_stats = {
                 'null': 0,
                 'not_null': 0,
                 'sample_values': []
             }
-            for r in result[:10]:  # Sample first 10
+            for r in result[:10]:
                 if r.get('voucher_no') is None:
                     voucher_no_stats['null'] += 1
                 else:
@@ -317,13 +305,11 @@ class DatabaseConnector:
             logging.info(f"📊 Voucher_no stats - NULL: {voucher_no_stats['null']}, NOT NULL: {voucher_no_stats['not_null']}")
             logging.info(f"📊 Sample voucher_no values: {voucher_no_stats['sample_values']}")
             
-            # Statistics by super_code
             super_code_counts = {}
             for r in result:
                 sc = r.get('super_code', 'None')
                 super_code_counts[sc] = super_code_counts.get(sc, 0) + 1
             
-            # Date range statistics for CASH and BANK
             cash_bank_records = [r for r in result if r.get('super_code') in ('CASH', 'BANK')]
             if cash_bank_records:
                 dates_with_data = [r.get('entry_date') for r in cash_bank_records if r.get('entry_date')]
@@ -440,19 +426,16 @@ class DatabaseConnector:
         """Fetch sales records from acc_invmast where billno > 0 AND invdate == today's date (Asia/Kolkata)"""
         cursor = None
         try:
-            # determine today's date in Asia/Kolkata
             try:
                 from zoneinfo import ZoneInfo
                 tz = ZoneInfo('Asia/Kolkata')
                 today = datetime.now(tz).date()
             except Exception:
-                # fallback to pytz-like interface if zoneinfo not available
                 try:
                     from pytz import timezone
                     tz = timezone('Asia/Kolkata')
                     today = datetime.now(tz).date()
                 except Exception:
-                    # final fallback to naive UTC date (not ideal)
                     today = datetime.utcnow().date()
 
             cursor = self._cursor()
@@ -490,19 +473,16 @@ class DatabaseConnector:
         """Fetch purchase records from acc_purchasemaster where billno > 0 AND date == today's date (Asia/Kolkata)"""
         cursor = None
         try:
-            # determine today's date in Asia/Kolkataa
             try:
                 from zoneinfo import ZoneInfo
                 tz = ZoneInfo('Asia/Kolkata')
                 today = datetime.now(tz).date()
             except Exception:
-                # fallback to pytz-like interface if zoneinfo not available
                 try:
                     from pytz import timezone
                     tz = timezone('Asia/Kolkata')
                     today = datetime.now(tz).date()
                 except Exception:
-                    # final fallback to naive UTC date (not ideal)
                     today = datetime.utcnow().date()
 
             cursor = self._cursor()
@@ -536,6 +516,95 @@ class DatabaseConnector:
                 except Exception:
                     pass
 
+    def fetch_sales_daywise(self) -> Optional[List[Dict[str, Any]]]:
+        """Fetch sales summary by date for last 8 days from acc_invmast"""
+        cursor = None
+        try:
+            cursor = self._cursor()
+            
+            query = """
+                SELECT  
+                    invdate AS "date", 
+                    COUNT(*) AS total_bills, 
+                    SUM(nettotal) AS total_amount 
+                FROM acc_invmast 
+                WHERE billno > 0 
+                AND invdate BETWEEN DATEADD(DAY, -7, CURRENT DATE) AND CURRENT DATE 
+                GROUP BY invdate 
+                ORDER BY invdate DESC
+            """
+            
+            logging.info("📅 Executing sales_daywise query (last 8 days)...")
+            cursor.execute(query)
+            columns = [col[0] for col in cursor.description]
+            result = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            
+            logging.info(f"✅ Fetched {len(result)} sales_daywise records")
+            return result
+            
+        except Exception as e:
+            logging.error(f"❌ Failed fetching sales_daywise: {e}")
+            logging.error(f"{traceback.format_exc()}")
+            return None
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+
+    def fetch_sales_monthwise(self) -> Optional[List[Dict[str, Any]]]:
+        """Fetch sales summary by month for current year from acc_invmast"""
+        cursor = None
+        try:
+            cursor = self._cursor()
+            
+            query = """
+                SELECT  
+                    MONTH(invdate) AS month_number, 
+                    YEAR(invdate) AS year, 
+                    COUNT(*) AS total_bills, 
+                    SUM(nettotal) AS total_amount 
+                FROM acc_invmast 
+                WHERE billno > 0 
+                AND YEAR(invdate) = YEAR(CURRENT DATE) 
+                GROUP BY YEAR(invdate), MONTH(invdate) 
+                ORDER BY MONTH(invdate)
+            """
+            
+            logging.info("📅 Executing sales_monthwise query (current year)...")
+            cursor.execute(query)
+            columns = [col[0] for col in cursor.description]
+            result = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            
+            # Add month names to the results
+            month_names = [
+                'January', 'February', 'March', 'April', 'May', 'June',
+                'July', 'August', 'September', 'October', 'November', 'December'
+            ]
+            
+            for row in result:
+                month_num = row.get('month_number', 1)
+                year = row.get('year', datetime.now().year)
+                if 1 <= month_num <= 12:
+                    row['month_name'] = f"{month_names[month_num - 1]} {year}"
+                else:
+                    row['month_name'] = f"Month {month_num} {year}"
+            
+            logging.info(f"✅ Fetched {len(result)} sales_monthwise records")
+            return result
+            
+        except Exception as e:
+            logging.error(f"❌ Failed fetching sales_monthwise: {e}")
+            logging.error(f"{traceback.format_exc()}")
+            return None
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+
 
 class WebAPIClient:
     # API Endpoints defined as class constants
@@ -548,6 +617,8 @@ class WebAPIClient:
     ENDPOINT_ACC_TT_SERVICE = "/upload-accttservicemaster/"
     ENDPOINT_SALES_TODAY = "/upload-sales-today/"
     ENDPOINT_PURCHASE_TODAY = "/upload-purchase-today/"
+    ENDPOINT_SALES_DAYWISE = "/upload-sales-daywise/"
+    ENDPOINT_SALES_MONTHWISE = "/upload-sales-monthwise/"
 
     def __init__(self, config: DatabaseConfig):
         self.config = config
@@ -570,7 +641,7 @@ class WebAPIClient:
                 logging.info("✅ acc_tt_servicemaster uploaded successfully")
                 return True
             else:
-                logging.error(f"❌ acc_tt_servicemaster upload failed: {res.status_code} — {res.text}")
+                logging.error(f"❌ acc_tt_servicemaster upload failed: {res.status_code} – {res.text}")
                 return False
         except Exception as e:
             logging.error(f"❌ Exception in upload_accttservicemaster: {e}")
@@ -825,13 +896,42 @@ class WebAPIClient:
             logging.error(f"❌ Exception in upload_purchase_today: {e}")
             return False
 
+    def upload_sales_daywise(self, sales_daywise: List[Dict[str, Any]]) -> bool:
+        """Upload sales_daywise records"""
+        url = f"{self.config.api_base_url}{self.ENDPOINT_SALES_DAYWISE}?client_id={self.config.client_id}"
+        try:
+            res = self.session.post(url, json=sales_daywise, timeout=self.config.api_timeout)
+            if res.status_code in [200, 201]:
+                logging.info("✅ Sales_Daywise uploaded successfully")
+                return True
+            else:
+                logging.error(f"❌ Upload failed: {res.status_code} - {res.text}")
+                return False
+        except Exception as e:
+            logging.error(f"❌ Exception in upload_sales_daywise: {e}")
+            return False
+
+    def upload_sales_monthwise(self, sales_monthwise: List[Dict[str, Any]]) -> bool:
+        """Upload sales_monthwise records"""
+        url = f"{self.config.api_base_url}{self.ENDPOINT_SALES_MONTHWISE}?client_id={self.config.client_id}"
+        try:
+            res = self.session.post(url, json=sales_monthwise, timeout=self.config.api_timeout)
+            if res.status_code in [200, 201]:
+                logging.info("✅ Sales_Monthwise uploaded successfully")
+                return True
+            else:
+                logging.error(f"❌ Upload failed: {res.status_code} - {res.text}")
+                return False
+        except Exception as e:
+            logging.error(f"❌ Exception in upload_sales_monthwise: {e}")
+            return False
+
 
 class SyncTool:
     def __init__(self):
         self.config: Optional[DatabaseConfig] = None
         self.db_connector: Optional[DatabaseConnector] = None
         self.api_client: Optional[WebAPIClient] = None
-        # Setup minimal logging; after config loaded we'll reset if needed
         logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
         logging.info("=== SQL Anywhere Sync Tool Started ===")
 
@@ -844,7 +944,6 @@ class SyncTool:
     def initialize(self) -> bool:
         try:
             self.config = DatabaseConfig()
-            # Reset logging level based on config
             self._setup_logging()
             self.db_connector = DatabaseConnector(self.config)
             self.api_client = WebAPIClient(self.config)
@@ -939,7 +1038,6 @@ class SyncTool:
         
         return valid
 
-    
     def validate_acc_ledgers_data(self, acc_ledgers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         valid = []
         voucher_errors = []
@@ -948,7 +1046,6 @@ class SyncTool:
             if not l.get('code'):
                 continue
             
-            # Handle entry_date
             entry_date = None
             if l.get('entry_date'):
                 try:
@@ -973,13 +1070,11 @@ class SyncTool:
                     logging.warning(f"Could not parse date {l['entry_date']}: {date_e}")
                     entry_date = None
             
-            # Handle voucher_no with better error tracking
             voucher_no = None
             raw_voucher = l.get('voucher_no')
             
             if raw_voucher is not None:
                 try:
-                    # Handle different types
                     if isinstance(raw_voucher, int):
                         voucher_no = raw_voucher
                     elif isinstance(raw_voucher, float):
@@ -987,10 +1082,8 @@ class SyncTool:
                     elif isinstance(raw_voucher, str):
                         cleaned = raw_voucher.strip()
                         if cleaned:
-                            # Try to convert string to int
                             voucher_no = int(float(cleaned))
                     else:
-                        # Try direct conversion for other types
                         voucher_no = int(raw_voucher)
                         
                 except (ValueError, TypeError) as voucher_e:
@@ -1003,7 +1096,6 @@ class SyncTool:
                     })
                     voucher_no = None
             
-            # Handle debit and credit
             debit = None
             credit = None
             try:
@@ -1032,7 +1124,6 @@ class SyncTool:
                 'super_code': super_code
             })
         
-        # Log voucher_no statistics
         voucher_stats = {
             'total_records': len(valid),
             'with_voucher_no': sum(1 for r in valid if r.get('voucher_no') is not None),
@@ -1044,12 +1135,10 @@ class SyncTool:
         
         if voucher_errors:
             logging.warning(f"⚠️ Found {len(voucher_errors)} voucher_no conversion errors")
-            # Log first 5 errors as examples
             for err in voucher_errors[:5]:
                 logging.warning(f"  - Record {err['index']}, code={err['code']}: "
                             f"value={err['raw_value']} (type={err['type']}), error={err['error']}")
         
-        # Log super_code distribution
         super_code_counts = {}
         for r in valid:
             sc = r.get('super_code', 'None')
@@ -1179,6 +1268,83 @@ class SyncTool:
                 'date': date,
                 'total': total,
                 'suppliername': p.get('suppliername', '')
+            })
+        return valid
+
+    def validate_sales_daywise_data(self, sales_daywise: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Validate sales_daywise data"""
+        valid = []
+        for i, s in enumerate(sales_daywise):
+            date = None
+            if s.get('date'):
+                try:
+                    if hasattr(s['date'], 'strftime'):
+                        date = s['date'].strftime('%Y-%m-%d')
+                    else:
+                        date = str(s['date'])
+                except Exception:
+                    date = None
+            
+            total_bills = 0
+            total_amount = 0
+            try:
+                if s.get('total_bills') is not None:
+                    total_bills = int(s['total_bills'])
+            except (ValueError, TypeError):
+                total_bills = 0
+                
+            try:
+                if s.get('total_amount') is not None:
+                    total_amount = float(s['total_amount'])
+            except (ValueError, TypeError):
+                total_amount = 0
+            
+            valid.append({
+                'date': date,
+                'total_bills': total_bills,
+                'total_amount': total_amount
+            })
+        return valid
+
+    def validate_sales_monthwise_data(self, sales_monthwise: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Validate sales_monthwise data"""
+        valid = []
+        for i, s in enumerate(sales_monthwise):
+            month_number = 1
+            year = datetime.now().year
+            total_bills = 0
+            total_amount = 0
+            
+            try:
+                if s.get('month_number') is not None:
+                    month_number = int(s['month_number'])
+            except (ValueError, TypeError):
+                month_number = 1
+            
+            try:
+                if s.get('year') is not None:
+                    year = int(s['year'])
+            except (ValueError, TypeError):
+                year = datetime.now().year
+                
+            try:
+                if s.get('total_bills') is not None:
+                    total_bills = int(s['total_bills'])
+            except (ValueError, TypeError):
+                total_bills = 0
+                
+            try:
+                if s.get('total_amount') is not None:
+                    total_amount = float(s['total_amount'])
+            except (ValueError, TypeError):
+                total_amount = 0
+            
+            valid.append({
+                'month_name': s.get('month_name', f'Month {month_number}'),
+                'month_number': month_number,
+                'year': year,
+                'total_bills': total_bills,
+                'total_amount': total_amount
             })
         return valid
 
@@ -1325,6 +1491,36 @@ class SyncTool:
                 print("📊 Found 0 purchase_today entries")
         else:
             print("❌ Failed to fetch purchase_today data")
+
+        # Sync Sales Daywise
+        sales_daywise = self.db_connector.fetch_sales_daywise()
+        if sales_daywise is not None:
+            if sales_daywise:
+                print(f"📊 Found {len(sales_daywise)} sales_daywise entries")
+                valid_sales_daywise = self.validate_sales_daywise_data(sales_daywise)
+                if valid_sales_daywise:
+                    self.api_client.upload_sales_daywise(valid_sales_daywise)
+                else:
+                    print("❌ No valid sales_daywise data")
+            else:
+                print("📊 Found 0 sales_daywise entries")
+        else:
+            print("❌ Failed to fetch sales_daywise data")
+
+        # Sync Sales Monthwise
+        sales_monthwise = self.db_connector.fetch_sales_monthwise()
+        if sales_monthwise is not None:
+            if sales_monthwise:
+                print(f"📊 Found {len(sales_monthwise)} sales_monthwise entries")
+                valid_sales_monthwise = self.validate_sales_monthwise_data(sales_monthwise)
+                if valid_sales_monthwise:
+                    self.api_client.upload_sales_monthwise(valid_sales_monthwise)
+                else:
+                    print("❌ No valid sales_monthwise data")
+            else:
+                print("📊 Found 0 sales_monthwise entries")
+        else:
+            print("❌ Failed to fetch sales_monthwise data")
 
         # Ensure DB connection closed
         try:
