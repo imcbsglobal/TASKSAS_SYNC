@@ -617,8 +617,8 @@ class WebAPIClient:
     ENDPOINT_ACC_TT_SERVICE = "/upload-accttservicemaster/"
     ENDPOINT_SALES_TODAY = "/upload-sales-today/"
     ENDPOINT_PURCHASE_TODAY = "/upload-purchase-today/"
-    ENDPOINT_SALES_DAYWISE = "/upload-sales-daywise/"
-    ENDPOINT_SALES_MONTHWISE = "/upload-sales-monthwise/"
+    # ENDPOINT_SALES_DAYWISE = "/upload-sales-daywise/"
+    # ENDPOINT_SALES_MONTHWISE = "/upload-sales-monthwise/"
 
     def __init__(self, config: DatabaseConfig):
         self.config = config
@@ -1271,83 +1271,7 @@ class SyncTool:
             })
         return valid
 
-    def validate_sales_daywise_data(self, sales_daywise: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Validate sales_daywise data"""
-        valid = []
-        for i, s in enumerate(sales_daywise):
-            date = None
-            if s.get('date'):
-                try:
-                    if hasattr(s['date'], 'strftime'):
-                        date = s['date'].strftime('%Y-%m-%d')
-                    else:
-                        date = str(s['date'])
-                except Exception:
-                    date = None
-            
-            total_bills = 0
-            total_amount = 0
-            try:
-                if s.get('total_bills') is not None:
-                    total_bills = int(s['total_bills'])
-            except (ValueError, TypeError):
-                total_bills = 0
-                
-            try:
-                if s.get('total_amount') is not None:
-                    total_amount = float(s['total_amount'])
-            except (ValueError, TypeError):
-                total_amount = 0
-            
-            valid.append({
-                'date': date,
-                'total_bills': total_bills,
-                'total_amount': total_amount
-            })
-        return valid
-
-    def validate_sales_monthwise_data(self, sales_monthwise: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Validate sales_monthwise data"""
-        valid = []
-        for i, s in enumerate(sales_monthwise):
-            month_number = 1
-            year = datetime.now().year
-            total_bills = 0
-            total_amount = 0
-            
-            try:
-                if s.get('month_number') is not None:
-                    month_number = int(s['month_number'])
-            except (ValueError, TypeError):
-                month_number = 1
-            
-            try:
-                if s.get('year') is not None:
-                    year = int(s['year'])
-            except (ValueError, TypeError):
-                year = datetime.now().year
-                
-            try:
-                if s.get('total_bills') is not None:
-                    total_bills = int(s['total_bills'])
-            except (ValueError, TypeError):
-                total_bills = 0
-                
-            try:
-                if s.get('total_amount') is not None:
-                    total_amount = float(s['total_amount'])
-            except (ValueError, TypeError):
-                total_amount = 0
-            
-            valid.append({
-                'month_name': s.get('month_name', f'Month {month_number}'),
-                'month_number': month_number,
-                'year': year,
-                'total_bills': total_bills,
-                'total_amount': total_amount
-            })
-        return valid
-
+    
     def run(self) -> bool:
         print("🔄 Starting SQL Anywhere to Web API sync...")
         if not self.initialize():
@@ -1492,35 +1416,7 @@ class SyncTool:
         else:
             print("❌ Failed to fetch purchase_today data")
 
-        # Sync Sales Daywise
-        sales_daywise = self.db_connector.fetch_sales_daywise()
-        if sales_daywise is not None:
-            if sales_daywise:
-                print(f"📊 Found {len(sales_daywise)} sales_daywise entries")
-                valid_sales_daywise = self.validate_sales_daywise_data(sales_daywise)
-                if valid_sales_daywise:
-                    self.api_client.upload_sales_daywise(valid_sales_daywise)
-                else:
-                    print("❌ No valid sales_daywise data")
-            else:
-                print("📊 Found 0 sales_daywise entries")
-        else:
-            print("❌ Failed to fetch sales_daywise data")
-
-        # Sync Sales Monthwise
-        sales_monthwise = self.db_connector.fetch_sales_monthwise()
-        if sales_monthwise is not None:
-            if sales_monthwise:
-                print(f"📊 Found {len(sales_monthwise)} sales_monthwise entries")
-                valid_sales_monthwise = self.validate_sales_monthwise_data(sales_monthwise)
-                if valid_sales_monthwise:
-                    self.api_client.upload_sales_monthwise(valid_sales_monthwise)
-                else:
-                    print("❌ No valid sales_monthwise data")
-            else:
-                print("📊 Found 0 sales_monthwise entries")
-        else:
-            print("❌ Failed to fetch sales_monthwise data")
+        
 
         # Ensure DB connection closed
         try:
