@@ -1274,10 +1274,47 @@ class SyncTool:
     
     def run(self) -> bool:
         print("🔄 Starting SQL Anywhere to Web API sync...")
+
+        # Initialize first (loads config.json and prepares DB + API client)
         if not self.initialize():
             return False
+
+        # 🔐 Client Activation Check (AFTER initialize → config available)
+        client_ids_api = "https://activate.imcbs.com/client-id-list/get-client-ids/"
+
+        try:
+            res = requests.get(client_ids_api, timeout=20, verify=False)
+
+            if res.status_code != 200:
+                print(f"❌ Activation API error: HTTP {res.status_code}")
+                return False
+
+            data = res.json()
+
+            # Expected format: {"client_ids": ["ID1", "ID2", ...]}
+            allowed_ids = data.get("client_ids", [])
+
+            if not allowed_ids:
+                print("❌ Activation API returned no client IDs")
+                print("Response:", data)
+                return False
+
+            if self.config.client_id not in allowed_ids:
+                print(f"❌ Sync Blocked - Client ID '{self.config.client_id}' not activated!")
+                print("⚠️ Contact IMCBS support to activate this Client ID.")
+                return False
+            
+            print(f"✅ Client ID '{self.config.client_id}' activated. Sync allowed!")
+
+        except Exception as e:
+            print(f"❌ Activation check failed: {e}")
+            print("⚠️ Internet issue or activation server unreachable")
+            return False
+
+        # 🔌 Connect DB
         if not self.db_connector.connect():
             return False
+
 
         # Sync Users
         users = self.db_connector.fetch_users()

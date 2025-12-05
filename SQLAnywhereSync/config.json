@@ -10,7 +10,7 @@
     "timeout": 120
   },
   "settings": {
-    "client_id": "TASK_SAS",
+    "client_id": "",
     "table_name_users": "acc_users",
     "table_name_misel": "misel",
     "batch_size": 1000,
