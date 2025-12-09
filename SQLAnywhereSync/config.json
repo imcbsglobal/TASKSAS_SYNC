@@ -1,7 +1,7 @@
 
 {
   "database": {
-    "dsn": "PLANET",
+    "dsn": "pktc",
     "username": "DBA",
     "password": "(*$^)"
   },
