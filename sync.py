@@ -3,7 +3,7 @@
 SQL Anywhere to Web API Sync Tool
 Connects to SQL Anywhere database via ODBC and syncs data to web API
 
-Updated: Added sales_daywise and sales_monthwise sync functionality
+Updated: Added product-related tables sync functionality
 """
 
 import json
@@ -217,7 +217,7 @@ class DatabaseConnector:
             logging.info(f"📈 Records by super_code: {super_code_counts}")
             
             area_count = sum(1 for r in results if r.get('area') and str(r['area']).strip())
-            logging.info(f"📍 Records with non-empty area field: {area_count}")
+            logging.info(f"🔍 Records with non-empty area field: {area_count}")
             
             return results
         except Exception as e:
@@ -285,7 +285,7 @@ class DatabaseConnector:
             """
 
             logging.info("Executing acc_ledgers query with super_code and date filter...")
-            logging.info(f"📍 Date filter: CASH/BANK records >= {fifteen_days_ago.isoformat()}")
+            logging.info(f"🔍 Date filter: CASH/BANK records >= {fifteen_days_ago.isoformat()}")
             cursor.execute(query, (fifteen_days_ago,))
             columns = [col[0] for col in cursor.description]
             result = [dict(zip(columns, row)) for row in cursor.fetchall()]
@@ -605,6 +605,139 @@ class DatabaseConnector:
                 except Exception:
                     pass
 
+    def fetch_acc_product(self) -> Optional[List[Dict[str, Any]]]:
+        """Fetch product master records"""
+        cursor = None
+        try:
+            cursor = self._cursor()
+            query = """
+                SELECT 
+                    code,
+                    name,
+                    taxcode,
+                    product,
+                    brand,
+                    unit,
+                    defected,
+                    text6,
+                    settings
+                FROM dba.acc_product
+                WHERE TRIM(defected) = 'O'
+            """
+
+            logging.info("Executing acc_product query...")
+            cursor.execute(query)
+            columns = [column[0] for column in cursor.description]
+            result = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            logging.info(f"✅ Fetched {len(result)} acc_product records")
+            return result
+        except Exception as e:
+            logging.error(f"❌ Failed fetching acc_product: {e}")
+            logging.error(traceback.format_exc())
+            return None
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+
+    def fetch_acc_productbatch(self) -> Optional[List[Dict[str, Any]]]:
+        """Fetch product batch/pricing records"""
+        cursor = None
+        try:
+            cursor = self._cursor()
+            query = """
+                SELECT 
+                    productcode,
+                    salesprice,
+                    secondprice,
+                    thirdprice,
+                    fourthprice,
+                    nlc1,
+                    quantity,
+                    barcode,
+                    bmrp,
+                    cost,
+                    expirydate,
+                    modified,
+                    modifiedtime,
+                    settings
+                FROM dba.acc_productbatch
+            """
+            logging.info("Executing acc_productbatch query...")
+            cursor.execute(query)
+            columns = [column[0] for column in cursor.description]
+            result = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            logging.info(f"✅ Fetched {len(result)} acc_productbatch records")
+            return result
+        except Exception as e:
+            logging.error(f"❌ Failed fetching acc_productbatch: {e}")
+            logging.error(traceback.format_exc())
+            return None
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+
+    def fetch_acc_pricecode(self) -> Optional[List[Dict[str, Any]]]:
+        """Fetch price code master records"""
+        cursor = None
+        try:
+            cursor = self._cursor()
+            query = """
+                SELECT 
+                    code,
+                    name
+                FROM dba.acc_pricecode
+            """
+            logging.info("Executing acc_pricecode query...")
+            cursor.execute(query)
+            columns = [column[0] for column in cursor.description]
+            result = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            logging.info(f"✅ Fetched {len(result)} acc_pricecode records")
+            return result
+        except Exception as e:
+            logging.error(f"❌ Failed fetching acc_pricecode: {e}")
+            logging.error(traceback.format_exc())
+            return None
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+
+    def fetch_acc_productphoto(self) -> Optional[List[Dict[str, Any]]]:
+        """Fetch product photo records"""
+        cursor = None
+        try:
+            cursor = self._cursor()
+            query = """
+                SELECT 
+                    code,
+                    url
+                FROM DBA.acc_productphoto
+            """
+            logging.info("Executing acc_productphoto query...")
+            cursor.execute(query)
+            columns = [column[0] for column in cursor.description]
+            result = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            logging.info(f"✅ Fetched {len(result)} acc_productphoto records")
+            return result
+        except Exception as e:
+            logging.error(f"❌ Failed fetching acc_productphoto: {e}")
+            logging.error(traceback.format_exc())
+            return None
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+
 
 class WebAPIClient:
     # API Endpoints defined as class constants
@@ -617,8 +750,11 @@ class WebAPIClient:
     ENDPOINT_ACC_TT_SERVICE = "/upload-accttservicemaster/"
     ENDPOINT_SALES_TODAY = "/upload-sales-today/"
     ENDPOINT_PURCHASE_TODAY = "/upload-purchase-today/"
-    # ENDPOINT_SALES_DAYWISE = "/upload-sales-daywise/"
-    # ENDPOINT_SALES_MONTHWISE = "/upload-sales-monthwise/"
+    ENDPOINT_SALES_DAYWISE = "/upload-sales-daywise/"
+    ENDPOINT_ACC_PRODUCT = "/upload-acc-product/"
+    ENDPOINT_ACC_PRODUCTBATCH = "/upload-acc-productbatch/"
+    ENDPOINT_ACC_PRICECODE = "/upload-acc-pricecode/"
+    ENDPOINT_ACC_PRODUCTPHOTO = "/upload-acc-productphoto/"
 
     def __init__(self, config: DatabaseConfig):
         self.config = config
@@ -911,20 +1047,140 @@ class WebAPIClient:
             logging.error(f"❌ Exception in upload_sales_daywise: {e}")
             return False
 
-    def upload_sales_monthwise(self, sales_monthwise: List[Dict[str, Any]]) -> bool:
-        """Upload sales_monthwise records"""
-        url = f"{self.config.api_base_url}{self.ENDPOINT_SALES_MONTHWISE}?client_id={self.config.client_id}"
+    def upload_acc_product(self, products: List[Dict[str, Any]]) -> bool:
+        """Upload acc_product records"""
+        if not products:
+            logging.warning("No acc_product data to upload")
+            return True
+        
+        url = f"{self.config.api_base_url}{self.ENDPOINT_ACC_PRODUCT}?client_id={self.config.client_id}"
+        
+        if len(products) > 1000:
+            logging.info(f"📦 Large dataset detected ({len(products)} records). Using batch upload...")
+            return self._upload_in_batches_generic('acc_product', products, batch_size=500)
+        
         try:
-            res = self.session.post(url, json=sales_monthwise, timeout=self.config.api_timeout)
+            res = self.session.post(url, json=products, timeout=self.config.api_timeout)
             if res.status_code in [200, 201]:
-                logging.info("✅ Sales_Monthwise uploaded successfully")
+                logging.info("✅ acc_product uploaded successfully")
                 return True
             else:
                 logging.error(f"❌ Upload failed: {res.status_code} - {res.text}")
                 return False
         except Exception as e:
-            logging.error(f"❌ Exception in upload_sales_monthwise: {e}")
+            logging.error(f"❌ Exception in upload_acc_product: {e}")
             return False
+
+    def upload_acc_productbatch(self, batches: List[Dict[str, Any]]) -> bool:
+        """Upload acc_productbatch records"""
+        if not batches:
+            logging.warning("No acc_productbatch data to upload")
+            return True
+        
+        url = f"{self.config.api_base_url}{self.ENDPOINT_ACC_PRODUCTBATCH}?client_id={self.config.client_id}"
+        
+        if len(batches) > 1000:
+            logging.info(f"📦 Large dataset detected ({len(batches)} records). Using batch upload...")
+            return self._upload_in_batches_generic('acc_productbatch', batches, batch_size=500)
+        
+        try:
+            res = self.session.post(url, json=batches, timeout=self.config.api_timeout)
+            if res.status_code in [200, 201]:
+                logging.info("✅ acc_productbatch uploaded successfully")
+                return True
+            else:
+                logging.error(f"❌ Upload failed: {res.status_code} - {res.text}")
+                return False
+        except Exception as e:
+            logging.error(f"❌ Exception in upload_acc_productbatch: {e}")
+            return False
+
+    def upload_acc_pricecode(self, price_codes: List[Dict[str, Any]]) -> bool:
+        """Upload acc_pricecode records"""
+        if not price_codes:
+            logging.warning("No acc_pricecode data to upload")
+            return True
+        
+        url = f"{self.config.api_base_url}{self.ENDPOINT_ACC_PRICECODE}?client_id={self.config.client_id}"
+        
+        try:
+            res = self.session.post(url, json=price_codes, timeout=self.config.api_timeout)
+            if res.status_code in [200, 201]:
+                logging.info("✅ acc_pricecode uploaded successfully")
+                return True
+            else:
+                logging.error(f"❌ Upload failed: {res.status_code} - {res.text}")
+                return False
+        except Exception as e:
+            logging.error(f"❌ Exception in upload_acc_pricecode: {e}")
+            return False
+
+    def upload_acc_productphoto(self, photos: List[Dict[str, Any]]) -> bool:
+        """Upload acc_productphoto records"""
+        if not photos:
+            logging.warning("No acc_productphoto data to upload")
+            return True
+        
+        url = f"{self.config.api_base_url}{self.ENDPOINT_ACC_PRODUCTPHOTO}?client_id={self.config.client_id}"
+        
+        if len(photos) > 1000:
+            logging.info(f"📦 Large dataset detected ({len(photos)} records). Using batch upload...")
+            return self._upload_in_batches_generic('acc_productphoto', photos, batch_size=500)
+        
+        try:
+            res = self.session.post(url, json=photos, timeout=self.config.api_timeout)
+            if res.status_code in [200, 201]:
+                logging.info("✅ acc_productphoto uploaded successfully")
+                return True
+            else:
+                logging.error(f"❌ Upload failed: {res.status_code} - {res.text}")
+                return False
+        except Exception as e:
+            logging.error(f"❌ Exception in upload_acc_productphoto: {e}")
+            return False
+
+    def _upload_in_batches_generic(self, table_name: str, data: List[Dict[str, Any]], batch_size: int = 500) -> bool:
+        """Generic batch upload method for product tables"""
+        if not data:
+            return True
+        
+        endpoint_map = {
+            'acc_product': self.ENDPOINT_ACC_PRODUCT,
+            'acc_productbatch': self.ENDPOINT_ACC_PRODUCTBATCH,
+            'acc_productphoto': self.ENDPOINT_ACC_PRODUCTPHOTO
+        }
+        
+        endpoint = endpoint_map.get(table_name, f"/upload-{table_name}/")
+        total_records = len(data)
+        url = f"{self.config.api_base_url}{endpoint}?client_id={self.config.client_id}"
+        
+        success_count = 0
+        for i in range(0, total_records, batch_size):
+            batch = data[i:i + batch_size]
+            batch_num = (i // batch_size) + 1
+            total_batches = (total_records + batch_size - 1) // batch_size
+            
+            try:
+                logging.info(f"📤 Uploading {table_name} batch {batch_num}/{total_batches} ({len(batch)} records)")
+                
+                timeout = min(180, max(60, int(len(batch) // 5)))
+                batch_url = f"{url}&append=true" if i > 0 else url
+                
+                res = self.session.post(batch_url, json=batch, timeout=timeout)
+                
+                if res.status_code in [200, 201]:
+                    success_count += len(batch)
+                    logging.info(f"✅ Batch {batch_num}/{total_batches} uploaded successfully")
+                else:
+                    logging.error(f"❌ Batch {batch_num} failed: {res.status_code} - {res.text}")
+                    return False
+                    
+            except Exception as e:
+                logging.error(f"❌ Exception in batch {batch_num}: {e}")
+                return False
+        
+        logging.info(f"✅ {table_name.title()} uploaded successfully ({success_count}/{total_records} records)")
+        return True
 
 
 class SyncTool:
@@ -1271,7 +1527,141 @@ class SyncTool:
             })
         return valid
 
-    
+    def validate_sales_daywise_data(self, sales_daywise: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Validate sales_daywise data"""
+        valid = []
+        for item in sales_daywise:
+            date = None
+            if item.get('date'):
+                try:
+                    if hasattr(item['date'], 'strftime'):
+                        date = item['date'].strftime('%Y-%m-%d')
+                    else:
+                        date = str(item['date'])
+                except Exception:
+                    date = None
+            
+            valid.append({
+                'date': date,
+                'total_bills': int(item.get('total_bills', 0)),
+                'total_amount': float(item.get('total_amount', 0))
+            })
+        return valid
+
+    def validate_acc_product_data(self, products: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Validate acc_product data"""
+        valid = []
+        for product in products:
+            # Skip if no code
+            if not product.get('code'):
+                continue
+            
+            # ONLY sync product defected = 'O'
+            defect_flag = str(product.get('defected', '')).strip().upper()
+            if defect_flag != 'O':
+                continue
+
+            valid.append({
+                'code': str(product['code']).strip(),
+                'name': str(product.get('name', '')).strip() if product.get('name') else None,
+                'taxcode': str(product.get('taxcode', '')).strip() if product.get('taxcode') else None,
+                'product': str(product.get('product', '')).strip() if product.get('product') else None,
+                'brand': str(product.get('brand', '')).strip() if product.get('brand') else None,
+                'unit': str(product.get('unit', '')).strip() if product.get('unit') else None,
+                'defected': 'O',  # Force clean value
+                'text6': str(product.get('text6', '')).strip() if product.get('text6') else None,
+                'settings': str(product.get('settings', '')).strip() if product.get('settings') else None,
+            })
+        
+        logging.info(f"📊 Validated {len(valid)} defected='O' acc_product records")
+        return valid
+
+
+    def validate_acc_productbatch_data(self, batches: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Validate acc_productbatch data"""
+        valid = []
+        for batch in batches:
+            if not batch.get('productcode'):
+                continue
+            
+            # Helper function to convert to float safely
+            def safe_float(val):
+                try:
+                    return float(val) if val is not None else None
+                except (ValueError, TypeError):
+                    return None
+            
+            # Helper function to format date
+            def safe_date(val):
+                if val:
+                    try:
+                        if hasattr(val, 'strftime'):
+                            return val.strftime('%Y-%m-%d')
+                        else:
+                            return str(val)
+                    except Exception:
+                        return None
+                return None
+            
+            # Helper function to format time
+            def safe_time(val):
+                if val:
+                    try:
+                        if hasattr(val, 'strftime'):
+                            return val.strftime('%H:%M:%S')
+                        else:
+                            return str(val)
+                    except Exception:
+                        return None
+                return None
+            
+            valid.append({
+                'productcode': str(batch['productcode']).strip(),
+                'salesprice': safe_float(batch.get('salesprice')),
+                'secondprice': safe_float(batch.get('secondprice')),
+                'thirdprice': safe_float(batch.get('thirdprice')),
+                'fourthprice': safe_float(batch.get('fourthprice')),
+                'nlc1': safe_float(batch.get('nlc1')),
+                'quantity': safe_float(batch.get('quantity')),
+                'barcode': str(batch.get('barcode', '')).strip() if batch.get('barcode') else None,
+                'bmrp': safe_float(batch.get('bmrp')),
+                'cost': safe_float(batch.get('cost')),
+                'expirydate': safe_date(batch.get('expirydate')),
+                'modified': safe_date(batch.get('modified')),
+                'modifiedtime': safe_time(batch.get('modifiedtime')),
+                'settings': str(batch.get('settings', '')).strip() if batch.get('settings') else None,
+            })
+        
+        logging.info(f"📊 Validated {len(valid)} acc_productbatch records")
+        return valid
+
+    def validate_acc_pricecode_data(self, price_codes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Validate acc_pricecode data"""
+        valid = []
+        for pc in price_codes:
+            if not pc.get('code'):
+                continue
+            
+            valid.append({
+                'code': str(pc['code']).strip(),
+                'name': str(pc.get('name', '')).strip() if pc.get('name') else '',
+            })
+        
+        logging.info(f"📊 Validated {len(valid)} acc_pricecode records")
+        return valid
+
+    def validate_acc_productphoto_data(self, photos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Validate acc_productphoto data"""
+        valid = []
+        for photo in photos:
+            valid.append({
+                'code': str(photo.get('code', '')).strip() if photo.get('code') else None,
+                'url': str(photo.get('url', '')).strip() if photo.get('url') else None,
+            })
+        
+        logging.info(f"📊 Validated {len(valid)} acc_productphoto records")
+        return valid
+
     def run(self) -> bool:
         print("🔄 Starting SQL Anywhere to Web API sync...")
 
@@ -1279,7 +1669,7 @@ class SyncTool:
         if not self.initialize():
             return False
 
-        # 🔐 Client Activation Check (AFTER initialize → config available)
+        # 🔑 Client Activation Check (AFTER initialize → config available)
         client_ids_api = "https://activate.imcbs.com/client-id-list/get-client-ids/"
 
         try:
@@ -1311,7 +1701,7 @@ class SyncTool:
             print("⚠️ Internet issue or activation server unreachable")
             return False
 
-        # 🔌 Connect DB
+        # 📌 Connect DB
         if not self.db_connector.connect():
             return False
 
@@ -1354,7 +1744,7 @@ class SyncTool:
                 
                 if area_records:
                     sample_areas = [r['area'] for r in area_records[:5]]
-                    print(f"📍 Sample area values: {sample_areas}")
+                    print(f"🔍 Sample area values: {sample_areas}")
                 
                 if not self.api_client.upload_acc_master(valid_acc_master):
                     print("❌ CRITICAL: acc_master upload failed! Stopping sync.")
@@ -1453,7 +1843,83 @@ class SyncTool:
         else:
             print("❌ Failed to fetch purchase_today data")
 
+        # Sync Sales Daywise
+        sales_daywise = self.db_connector.fetch_sales_daywise()
+        if sales_daywise is not None:
+            if sales_daywise:
+                print(f"📊 Found {len(sales_daywise)} sales_daywise entries")
+                valid_sales_daywise = self.validate_sales_daywise_data(sales_daywise)
+                if valid_sales_daywise:
+                    self.api_client.upload_sales_daywise(valid_sales_daywise)
+                else:
+                    print("❌ No valid sales_daywise data")
+            else:
+                print("📊 Found 0 sales_daywise entries")
+        else:
+            print("❌ Failed to fetch sales_daywise data")
+
+        # NEW: Sync Product Tables
+        print("\n=== Syncing Product Tables ===")
         
+        # Sync acc_product
+        acc_product = self.db_connector.fetch_acc_product()
+        if acc_product is not None:
+            if acc_product:
+                print(f"📊 Found {len(acc_product)} acc_product entries")
+                valid_acc_product = self.validate_acc_product_data(acc_product)
+                if valid_acc_product:
+                    self.api_client.upload_acc_product(valid_acc_product)
+                else:
+                    print("❌ No valid acc_product data")
+            else:
+                print("📊 Found 0 acc_product entries")
+        else:
+            print("❌ Failed to fetch acc_product data")
+
+        # Sync acc_productbatch
+        acc_productbatch = self.db_connector.fetch_acc_productbatch()
+        if acc_productbatch is not None:
+            if acc_productbatch:
+                print(f"📊 Found {len(acc_productbatch)} acc_productbatch entries")
+                valid_acc_productbatch = self.validate_acc_productbatch_data(acc_productbatch)
+                if valid_acc_productbatch:
+                    self.api_client.upload_acc_productbatch(valid_acc_productbatch)
+                else:
+                    print("❌ No valid acc_productbatch data")
+            else:
+                print("📊 Found 0 acc_productbatch entries")
+        else:
+            print("❌ Failed to fetch acc_productbatch data")
+
+        # Sync acc_pricecode
+        acc_pricecode = self.db_connector.fetch_acc_pricecode()
+        if acc_pricecode is not None:
+            if acc_pricecode:
+                print(f"📊 Found {len(acc_pricecode)} acc_pricecode entries")
+                valid_acc_pricecode = self.validate_acc_pricecode_data(acc_pricecode)
+                if valid_acc_pricecode:
+                    self.api_client.upload_acc_pricecode(valid_acc_pricecode)
+                else:
+                    print("❌ No valid acc_pricecode data")
+            else:
+                print("📊 Found 0 acc_pricecode entries")
+        else:
+            print("❌ Failed to fetch acc_pricecode data")
+
+        # Sync acc_productphoto
+        acc_productphoto = self.db_connector.fetch_acc_productphoto()
+        if acc_productphoto is not None:
+            if acc_productphoto:
+                print(f"📊 Found {len(acc_productphoto)} acc_productphoto entries")
+                valid_acc_productphoto = self.validate_acc_productphoto_data(acc_productphoto)
+                if valid_acc_productphoto:
+                    self.api_client.upload_acc_productphoto(valid_acc_productphoto)
+                else:
+                    print("❌ No valid acc_productphoto data")
+            else:
+                print("📊 Found 0 acc_productphoto entries")
+        else:
+            print("❌ Failed to fetch acc_productphoto data")
 
         # Ensure DB connection closed
         try:
