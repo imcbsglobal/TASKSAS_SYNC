@@ -143,7 +143,11 @@ class DatabaseConnector:
         cursor = None
         try:
             cursor = self._cursor()
-            query = f"SELECT id, pass, role, accountcode FROM {self.config.table_name_users}"
+            query = f"""
+                SELECT id, pass, role, accountcode 
+                FROM {self.config.table_name_users}
+                WHERE TRIM(role) IN ('Level 1', 'Level 2', 'Level 3')
+                """
             logging.info(f"Executing query: {query}")
             cursor.execute(query)
             columns = [column[0] for column in cursor.description]
