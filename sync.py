@@ -238,6 +238,7 @@ class DatabaseConnector:
     def fetch_acc_ledgers(self) -> Optional[List[Dict[str, Any]]]:
         cursor = None
         try:
+            # timezone-safe today
             try:
                 from zoneinfo import ZoneInfo
                 tz = ZoneInfo('Asia/Kolkata')
@@ -249,24 +250,16 @@ class DatabaseConnector:
                     today = datetime.now(tz).date()
                 except Exception:
                     today = datetime.utcnow().date()
-            
+
             from datetime import timedelta
-            fifteen_days_ago = today - timedelta(days=15)
-            
-            logging.info(f"📅 Fetching acc_ledgers from {fifteen_days_ago.isoformat()} to {today.isoformat()}")
-            
+            thirty_days_ago = today - timedelta(days=30)
+
+            logging.info(f"📅 Fetching acc_ledgers for super_code=DEBTO from {thirty_days_ago.isoformat()} to {today.isoformat()}")
+
             cursor = self._cursor()
 
-            logging.info("Checking acc_ledgers table structure...")
-            cursor.execute("SELECT TOP 1 * FROM acc_ledgers")
-            logging.info(f"acc_ledgers columns: {[col[0] for col in cursor.description]}")
-            cursor.fetchall()
-
-            logging.info("🧪 Debug: Sampling voucher_no values from acc_ledgers...")
-            cursor.execute("SELECT TOP 10 code, voucher_no FROM acc_ledgers WHERE voucher_no IS NOT NULL")
-            for row in cursor.fetchall():
-                logging.info(f"🔎 Sample - code: [{row[0]}], voucher_no: [{row[1]}] (type: {type(row[1])})")
-
+            # IMPORTANT: cast the ledger date to DATE in case it's stored as timestamp or string.
+            # Using CAST to DATE makes the comparison reliable on different DB setups.
             query = """
                 SELECT
                     l.code,
@@ -279,57 +272,27 @@ class DatabaseConnector:
                     l.narration,
                     m.super_code
                 FROM acc_ledgers l
-                INNER JOIN acc_master m ON TRIM(l.code) = TRIM(m.code)
-                WHERE TRIM(m.super_code) IN ('DEBTO', 'SUNCR', 'CASH', 'BANK')
-                AND (
-                    (TRIM(m.super_code) IN ('CASH', 'BANK') AND l."date" >= ?)
-                    OR
-                    (TRIM(m.super_code) IN ('DEBTO', 'SUNCR'))
-                )
+                INNER JOIN acc_master m 
+                    ON TRIM(l.code) = TRIM(m.code)
+                WHERE TRIM(m.super_code) = 'DEBTO'
+                AND CAST(l."date" AS DATE) >= ?
+                ORDER BY CAST(l."date" AS DATE) DESC
             """
 
-            logging.info("Executing acc_ledgers query with super_code and date filter...")
-            logging.info(f"🔍 Date filter: CASH/BANK records >= {fifteen_days_ago.isoformat()}")
-            cursor.execute(query, (fifteen_days_ago,))
+            # Log the exact parameter we pass (helps debugging)
+            logging.info(f"Executing fetch_acc_ledgers query with param: {thirty_days_ago.isoformat()}")
+            cursor.execute(query, (thirty_days_ago,))
+
             columns = [col[0] for col in cursor.description]
-            result = [dict(zip(columns, row)) for row in cursor.fetchall()]
-            
-            voucher_no_stats = {
-                'null': 0,
-                'not_null': 0,
-                'sample_values': []
-            }
-            for r in result[:10]:
-                if r.get('voucher_no') is None:
-                    voucher_no_stats['null'] += 1
-                else:
-                    voucher_no_stats['not_null'] += 1
-                    voucher_no_stats['sample_values'].append(r.get('voucher_no'))
-            
-            logging.info(f"📊 Voucher_no stats - NULL: {voucher_no_stats['null']}, NOT NULL: {voucher_no_stats['not_null']}")
-            logging.info(f"📊 Sample voucher_no values: {voucher_no_stats['sample_values']}")
-            
-            super_code_counts = {}
-            for r in result:
-                sc = r.get('super_code', 'None')
-                super_code_counts[sc] = super_code_counts.get(sc, 0) + 1
-            
-            cash_bank_records = [r for r in result if r.get('super_code') in ('CASH', 'BANK')]
-            if cash_bank_records:
-                dates_with_data = [r.get('entry_date') for r in cash_bank_records if r.get('entry_date')]
-                if dates_with_data:
-                    min_date = min(dates_with_data)
-                    max_date = max(dates_with_data)
-                    logging.info(f"📅 CASH/BANK date range: {min_date} to {max_date}")
-            
-            logging.info(f"✅ Query succeeded! Returned {len(result)} records")
-            logging.info(f"📈 Records by super_code: {super_code_counts}")
-            
+            rows = cursor.fetchall()
+            result = [dict(zip(columns, row)) for row in rows]
+
+            logging.info(f"✅ fetch_acc_ledgers returned {len(result)} rows (DEBTO, last 30 days)")
             return result
 
         except Exception as e:
             logging.error(f"❌ Critical error in fetch_acc_ledgers: {e}")
-            logging.error(f"{traceback.format_exc()}")
+            logging.error(traceback.format_exc())
             return None
         finally:
             if cursor:
@@ -337,6 +300,7 @@ class DatabaseConnector:
                     cursor.close()
                 except Exception:
                     pass
+
 
     def fetch_acc_invmast(self) -> Optional[List[Dict[str, Any]]]:
         cursor = None
