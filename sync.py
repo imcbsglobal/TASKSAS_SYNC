@@ -588,9 +588,12 @@ class DatabaseConnector:
                     unit,
                     defected,
                     text6,
-                    settings
+                    settings,
+                    catagory,
+                    company
                 FROM dba.acc_product
                 WHERE TRIM(defected) = 'O'
+
             """
 
             logging.info("Executing acc_product query...")
@@ -1539,6 +1542,8 @@ class SyncTool:
                 'defected': 'O',  # Force clean value
                 'text6': str(product.get('text6', '')).strip() if product.get('text6') else None,
                 'settings': str(product.get('settings', '')).strip() if product.get('settings') else None,
+                'catagory': str(product.get('catagory', '')).strip() if product.get('catagory') else None,
+                'company': str(product.get('company', '')).strip() if product.get('company') else None,
             })
         
         logging.info(f"📊 Validated {len(valid)} defected='O' acc_product records")
