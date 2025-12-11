@@ -697,6 +697,36 @@ class DatabaseConnector:
                 except Exception:
                     pass
 
+    def fetch_acc_sales_types(self) -> Optional[List[Dict[str, Any]]]:
+        cursor = None
+        try:
+            cursor = self._cursor()
+            query = """
+                SELECT 
+                    name,
+                    goddown,
+                    user
+                FROM dba.acc_sales_types
+            """
+            logging.info("Executing acc_sales_types query...")
+            cursor.execute(query)
+
+            columns = [col[0] for col in cursor.description]
+            result = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+            logging.info(f"✅ Fetched {len(result)} acc_sales_types records")
+            return result
+
+        except Exception as e:
+            logging.error(f"❌ Failed fetching acc_sales_types: {e}")
+            return None
+
+        finally:
+            if cursor:
+                try: cursor.close()
+                except: pass
+
+
 
 class WebAPIClient:
     # API Endpoints defined as class constants
@@ -714,6 +744,7 @@ class WebAPIClient:
     ENDPOINT_ACC_PRODUCTBATCH = "/upload-acc-productbatch/"
     ENDPOINT_ACC_PRICECODE = "/upload-acc-pricecode/"
     ENDPOINT_ACC_PRODUCTPHOTO = "/upload-acc-productphoto/"
+    ENDPOINT_ACC_SALES_TYPES = "/upload-acc-sales-types/"
 
     def __init__(self, config: DatabaseConfig):
         self.config = config
@@ -1097,6 +1128,24 @@ class WebAPIClient:
         except Exception as e:
             logging.error(f"❌ Exception in upload_acc_productphoto: {e}")
             return False
+
+
+    def upload_acc_sales_types(self, rows: List[Dict[str, Any]]) -> bool:
+        url = f"{self.config.api_base_url}{self.ENDPOINT_ACC_SALES_TYPES}?client_id={self.config.client_id}"
+
+        try:
+            res = self.session.post(url, json=rows, timeout=self.config.api_timeout)
+            if res.status_code in [200, 201]:
+                logging.info("✅ acc_sales_types uploaded successfully")
+                return True
+            else:
+                logging.error(f"❌ acc_sales_types upload failed: {res.status_code} – {res.text}")
+                return False
+
+        except Exception as e:
+            logging.error(f"❌ Exception in upload_acc_sales_types: {e}")
+            return False
+
 
     def _upload_in_batches_generic(self, table_name: str, data: List[Dict[str, Any]], batch_size: int = 500) -> bool:
         """Generic batch upload method for product tables"""
@@ -1638,6 +1687,22 @@ class SyncTool:
         
         logging.info(f"📊 Validated {len(valid)} acc_productphoto records")
         return valid
+    
+    def validate_acc_sales_types(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        valid = []
+        for r in rows:
+            if not r.get('name'):
+                continue
+
+            valid.append({
+                'name': str(r.get('name', '')).strip(),
+                'goddown': str(r.get('goddown', '')).strip() if r.get('goddown') else '',
+                'user': str(r.get('user', '')).strip() if r.get('user') else '',
+            })
+
+        logging.info(f"📊 Validated {len(valid)} acc_sales_types records")
+        return valid
+
 
     def run(self) -> bool:
         print("🔄 Starting SQL Anywhere to Web API sync...")
@@ -1882,6 +1947,24 @@ class SyncTool:
                 print("📊 Found 0 acc_pricecode entries")
         else:
             print("❌ Failed to fetch acc_pricecode data")
+
+        # === Syncing acc_sales_types ===
+        print("\n=== Syncing acc_sales_types ===")
+
+        sales_types = self.db_connector.fetch_acc_sales_types()
+
+        if sales_types is not None:
+            print(f"📊 Found {len(sales_types)} acc_sales_types entries")
+
+            validated_sales_types = self.validate_acc_sales_types(sales_types)
+
+            if validated_sales_types:
+                self.api_client.upload_acc_sales_types(validated_sales_types)
+            else:
+                print("❌ No valid acc_sales_types data")
+        else:
+            print("❌ Failed to fetch acc_sales_types data")
+
 
         # Sync acc_productphoto
         acc_productphoto = self.db_connector.fetch_acc_productphoto()
