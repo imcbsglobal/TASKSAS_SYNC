@@ -195,6 +195,11 @@ class DatabaseConnector:
                     acc_master.opening_balance,
                     acc_master.debit,
                     acc_master.credit,
+                    acc_master.address,
+                    acc_master.city,
+                    acc_master.phone,
+                    acc_master.gstin,
+                    acc_master.remarkcolumntitle,
                     acc_master.place,
                     acc_master.phone2,
                     acc_departments.department AS openingdepartment,
@@ -204,36 +209,19 @@ class DatabaseConnector:
                     ON acc_master.openingdepartment = acc_departments.department_id
                 LEFT JOIN acc_tt_servicemaster
                     ON acc_master.area = acc_tt_servicemaster.code
-                WHERE acc_master.super_code IN ('DEBTO', 'SUNCR', 'CASH', 'BANK');
+                WHERE TRIM(acc_master.super_code) = 'DEBTO'
             """
-            logging.info(f"Executing query: {query}")
             cursor.execute(query)
             columns = [column[0] for column in cursor.description]
-            results = [dict(zip(columns, row)) for row in cursor.fetchall()]
-            
-            logging.info(f"📊 Fetched {len(results)} acc_master records")
-            
-            super_code_counts = {}
-            for r in results:
-                sc = r.get('super_code', 'None')
-                super_code_counts[sc] = super_code_counts.get(sc, 0) + 1
-            
-            logging.info(f"📈 Records by super_code: {super_code_counts}")
-            
-            area_count = sum(1 for r in results if r.get('area') and str(r['area']).strip())
-            logging.info(f"🔍 Records with non-empty area field: {area_count}")
-            
-            return results
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
         except Exception as e:
-            logging.error(f"❌ Failed fetching acc_master: {e}")
-            logging.error(traceback.format_exc())
+            logging.error(f"Failed fetching acc_master: {e}")
             return None
         finally:
             if cursor:
-                try:
-                    cursor.close()
-                except Exception:
-                    pass
+                try: cursor.close()
+                except: pass
+
 
     def fetch_acc_ledgers(self) -> Optional[List[Dict[str, Any]]]:
         cursor = None
@@ -1228,42 +1216,58 @@ class SyncTool:
     def validate_acc_master_data(self, acc_master: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         valid = []
         for i, m in enumerate(acc_master):
+
+            # Skip records without code
             if not m.get('code'):
                 continue
-            
+
+            # Clean area
             area_value = m.get('area', '')
             if area_value and area_value != 'No Area':
                 area_clean = str(area_value).strip()
             else:
                 area_clean = None
-            
+
+            # Clean super_code
             super_code = str(m.get('super_code', '')).strip() if m.get('super_code') else None
-            
+
             validated_record = {
                 'code': str(m['code']).strip(),
                 'name': str(m.get('name', '')).strip() if m.get('name') else '',
                 'super_code': super_code,
+
                 'opening_balance': float(m['opening_balance']) if m.get('opening_balance') is not None else None,
                 'debit': float(m['debit']) if m.get('debit') is not None else None,
                 'credit': float(m['credit']) if m.get('credit') is not None else None,
+
+                # ⭐ NEW FIELDS
+                'address': str(m.get('address', '')).strip() if m.get('address') else '',
+                'city': str(m.get('city', '')).strip() if m.get('city') else '',
+                'phone': str(m.get('phone', '')).strip() if m.get('phone') else '',
+                'gstin': str(m.get('gstin', '')).strip() if m.get('gstin') else '',
+                'remarkcolumntitle': str(m.get('remarkcolumntitle', '')).strip() if m.get('remarkcolumntitle') else '',
+
                 'place': str(m.get('place', '')).strip() if m.get('place') else '',
                 'phone2': str(m.get('phone2', '')).strip() if m.get('phone2') else '',
                 'openingdepartment': str(m.get('openingdepartment', '')).strip() if m.get('openingdepartment') else '',
-                'area': area_clean
+
+                'area': area_clean,
             }
-            
+
             valid.append(validated_record)
-            
+
+        # Debug logs
         area_count = sum(1 for r in valid if r.get('area'))
         super_code_counts = {}
         for r in valid:
             sc = r.get('super_code', 'None')
             super_code_counts[sc] = super_code_counts.get(sc, 0) + 1
-        
+
         logging.info(f"📊 After validation - Records with area data: {area_count}/{len(valid)}")
         logging.info(f"📊 After validation - Records by super_code: {super_code_counts}")
-        
+
         return valid
+
 
     def validate_acc_ledgers_data(self, acc_ledgers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         valid = []
