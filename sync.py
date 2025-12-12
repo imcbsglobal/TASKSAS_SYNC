@@ -726,6 +726,40 @@ class DatabaseConnector:
                 try: cursor.close()
                 except: pass
 
+    def fetch_acc_goddown(self):
+        cursor = self._cursor()
+        query = """
+            SELECT goddownid, name 
+            FROM dba.acc_goddown
+        """
+        cursor.execute(query)
+        columns = [c[0] for c in cursor.description]
+        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+    
+
+    def fetch_acc_goddownstock(self):
+        cursor = self._cursor()
+        query = """
+            SELECT goddownid, product, quantity, barcode 
+            FROM dba.acc_goddownstock
+        """
+        cursor.execute(query)
+        columns = [c[0] for c in cursor.description]
+        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+    
+
+    def fetch_acc_departments(self):
+        cursor = self._cursor()
+        query = """
+            SELECT department_id, department
+            FROM dba.acc_departments
+        """
+        cursor.execute(query)
+        columns = [c[0] for c in cursor.description]
+        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
+
 
 
 class WebAPIClient:
@@ -745,6 +779,9 @@ class WebAPIClient:
     ENDPOINT_ACC_PRICECODE = "/upload-acc-pricecode/"
     ENDPOINT_ACC_PRODUCTPHOTO = "/upload-acc-productphoto/"
     ENDPOINT_ACC_SALES_TYPES = "/upload-acc-sales-types/"
+    ENDPOINT_ACC_GODDOWN = "/upload-acc-goddown/"
+    ENDPOINT_ACC_GODDOWNSTOCK = "/upload-acc-goddownstock/"
+    ENDPOINT_ACC_DEPARTMENTS = "/upload-acc-departments/"
 
     def __init__(self, config: DatabaseConfig):
         self.config = config
@@ -1145,6 +1182,55 @@ class WebAPIClient:
         except Exception as e:
             logging.error(f"❌ Exception in upload_acc_sales_types: {e}")
             return False
+        
+
+    def upload_acc_goddown(self, rows: List[Dict[str, Any]]) -> bool:
+        url = f"{self.config.api_base_url}{self.ENDPOINT_ACC_GODDOWN}?client_id={self.config.client_id}"
+        try:
+            res = self.session.post(url, json=rows, timeout=60)
+            if res.status_code in [200, 201]:
+                logging.info(f"Uploaded {len(rows)} acc_goddown rows")
+                return True
+            else:
+                logging.error(f"Upload acc_goddown failed: {res.text}")
+                return False
+        except Exception as e:
+            logging.error(f"Error uploading acc_goddown: {e}")
+            return False
+
+
+    def upload_acc_goddownstock(self, rows: List[Dict[str, Any]]) -> bool:
+        url = f"{self.config.api_base_url}{self.ENDPOINT_ACC_GODDOWNSTOCK}?client_id={self.config.client_id}"
+        try:
+            res = self.session.post(url, json=rows, timeout=60)
+            if res.status_code in [200, 201]:
+                logging.info(f"Uploaded {len(rows)} acc_goddownstock rows")
+                return True
+            else:
+                logging.error(f"Upload acc_goddownstock failed: {res.text}")
+                return False
+        except Exception as e:
+            logging.error(f"Error uploading acc_goddownstock: {e}")
+            return False
+        
+
+    def upload_acc_departments(self, rows):
+        url = f"{self.config.api_base_url}{self.ENDPOINT_ACC_DEPARTMENTS}?client_id={self.config.client_id}"
+        try:
+            res = self.session.post(url, json=rows, timeout=60)
+            if res.status_code in [200, 201]:
+                logging.info(f"Uploaded {len(rows)} acc_departments rows")
+                return True
+            else:
+                logging.error(f"Upload acc_departments failed: {res.status_code} - {res.text}")
+                return False
+        except Exception as e:
+            logging.error(f"Error uploading acc_departments: {e}")
+            return False
+
+
+
+
 
 
     def _upload_in_batches_generic(self, table_name: str, data: List[Dict[str, Any]], batch_size: int = 500) -> bool:
@@ -1702,6 +1788,66 @@ class SyncTool:
 
         logging.info(f"📊 Validated {len(valid)} acc_sales_types records")
         return valid
+    
+
+    def validate_acc_goddown(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        valid = []
+        for i, row in enumerate(rows):
+            goddownid = row.get("goddownid")
+            name = row.get("name")
+
+            # required fields
+            if not goddownid or not name:
+                continue
+
+            valid.append({
+                "goddownid": str(goddownid).strip(),
+                "name": str(name).strip(),
+            })
+
+        return valid
+    
+
+    def validate_acc_goddownstock(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        valid = []
+        for i, row in enumerate(rows):
+            goddownid = row.get("goddownid")
+            product = row.get("product")
+
+            # required fields
+            if not goddownid or not product:
+                continue
+
+            # clean quantity
+            qty = row.get("quantity")
+            try:
+                qty_clean = float(qty) if qty not in [None, ""] else None
+            except:
+                qty_clean = None
+
+            valid.append({
+                "goddownid": str(goddownid).strip(),
+                "product": str(product).strip(),
+                "quantity": qty_clean,
+                "barcode": row.get("barcode")
+            })
+
+        return valid
+    
+    def validate_acc_departments(self, rows):
+        valid = []
+        for r in rows:
+            if not r.get("department_id") or not r.get("department"):
+                continue
+            
+            valid.append({
+                "department_id": str(r["department_id"]).strip(),
+                "department": str(r["department"]).strip(),
+            })
+
+        return valid
+
+
 
 
     def run(self) -> bool:
@@ -1964,6 +2110,37 @@ class SyncTool:
                 print("❌ No valid acc_sales_types data")
         else:
             print("❌ Failed to fetch acc_sales_types data")
+
+
+        acc_goddown = self.db_connector.fetch_acc_goddown()
+        if acc_goddown:
+            print(f"📊 Found {len(acc_goddown)} acc_goddown entries")
+            valid_goddown = self.validate_acc_goddown(acc_goddown)
+            if valid_goddown:
+                self.api_client.upload_acc_goddown(valid_goddown)
+            else:
+                print("❌ No valid acc_goddown data")
+
+        # Sync acc_goddownstock
+        acc_goddownstock = self.db_connector.fetch_acc_goddownstock()
+        if acc_goddownstock:
+            print(f"📊 Found {len(acc_goddownstock)} acc_goddownstock entries")
+            valid_goddownstock = self.validate_acc_goddownstock(acc_goddownstock)
+            if valid_goddownstock:
+                self.api_client.upload_acc_goddownstock(valid_goddownstock)
+            else:
+                print("❌ No valid acc_goddownstock data")
+
+
+        acc_departments = self.db_connector.fetch_acc_departments()
+        if acc_departments:
+            print(f"📊 Found {len(acc_departments)} acc_departments entries")
+            valid_depts = self.validate_acc_departments(acc_departments)
+            if valid_depts:
+                self.api_client.upload_acc_departments(valid_depts)
+            else:
+                print("❌ No valid acc_departments data")
+
 
 
         # Sync acc_productphoto
