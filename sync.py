@@ -770,11 +770,7 @@ class WebAPIClient:
     ENDPOINT_ACC_MASTER = "/upload-acc-master/"
     ENDPOINT_ACC_LEDGERS = "/upload-acc-ledgers/"
     ENDPOINT_ACC_INVMAST = "/upload-acc-invmast/"
-    ENDPOINT_CASH_BANK = "/upload-cashandbankaccmaster/"
     ENDPOINT_ACC_TT_SERVICE = "/upload-accttservicemaster/"
-    ENDPOINT_SALES_TODAY = "/upload-sales-today/"
-    ENDPOINT_PURCHASE_TODAY = "/upload-purchase-today/"
-    ENDPOINT_SALES_DAYWISE = "/upload-sales-daywise/"
     ENDPOINT_ACC_PRODUCT = "/upload-acc-product/"
     ENDPOINT_ACC_PRODUCTBATCH = "/upload-acc-productbatch/"
     ENDPOINT_ACC_PRICECODE = "/upload-acc-pricecode/"
@@ -1009,71 +1005,7 @@ class WebAPIClient:
             logging.error(f"❌ Exception in upload_acc_invmast: {e}")
             return False
 
-    def upload_cashandbankaccmaster(self, cashandbankaccmaster: List[Dict[str, Any]]) -> bool:
-        url = f"{self.config.api_base_url}{self.ENDPOINT_CASH_BANK}?client_id={self.config.client_id}"
-        try:
-            logging.info("🧹 Clearing existing cashandbankaccmaster data...")
-            clear_url = f"{url}&force_clear=true"
-            clear_res = self.session.post(clear_url, json=[], timeout=60)
-            
-            if clear_res.status_code not in [200, 201]:
-                logging.error(f"❌ Failed to clear existing data: {clear_res.status_code} - {clear_res.text}")
-            
-            res = self.session.post(url, json=cashandbankaccmaster, timeout=self.config.api_timeout)
-            if res.status_code in [200, 201]:
-                logging.info("✅ CashAndBankAccMaster uploaded successfully")
-                return True
-            else:
-                logging.error(f"❌ Upload failed: {res.status_code} - {res.text}")
-                return False
-        except Exception as e:
-            logging.error(f"❌ Exception in upload_cashandbankaccmaster: {e}")
-            return False
-
-    def upload_sales_today(self, sales_today: List[Dict[str, Any]]) -> bool:
-        """Upload sales_today records"""
-        url = f"{self.config.api_base_url}{self.ENDPOINT_SALES_TODAY}?client_id={self.config.client_id}"
-        try:
-            res = self.session.post(url, json=sales_today, timeout=self.config.api_timeout)
-            if res.status_code in [200, 201]:
-                logging.info("✅ Sales_Today uploaded successfully")
-                return True
-            else:
-                logging.error(f"❌ Upload failed: {res.status_code} - {res.text}")
-                return False
-        except Exception as e:
-            logging.error(f"❌ Exception in upload_sales_today: {e}")
-            return False
-
-    def upload_purchase_today(self, purchase_today: List[Dict[str, Any]]) -> bool:
-        """Upload purchase_today records"""
-        url = f"{self.config.api_base_url}{self.ENDPOINT_PURCHASE_TODAY}?client_id={self.config.client_id}"
-        try:
-            res = self.session.post(url, json=purchase_today, timeout=self.config.api_timeout)
-            if res.status_code in [200, 201]:
-                logging.info("✅ Purchase_Today uploaded successfully")
-                return True
-            else:
-                logging.error(f"❌ Upload failed: {res.status_code} - {res.text}")
-                return False
-        except Exception as e:
-            logging.error(f"❌ Exception in upload_purchase_today: {e}")
-            return False
-
-    def upload_sales_daywise(self, sales_daywise: List[Dict[str, Any]]) -> bool:
-        """Upload sales_daywise records"""
-        url = f"{self.config.api_base_url}{self.ENDPOINT_SALES_DAYWISE}?client_id={self.config.client_id}"
-        try:
-            res = self.session.post(url, json=sales_daywise, timeout=self.config.api_timeout)
-            if res.status_code in [200, 201]:
-                logging.info("✅ Sales_Daywise uploaded successfully")
-                return True
-            else:
-                logging.error(f"❌ Upload failed: {res.status_code} - {res.text}")
-                return False
-        except Exception as e:
-            logging.error(f"❌ Exception in upload_sales_daywise: {e}")
-            return False
+    
 
     def upload_acc_product(self, products: List[Dict[str, Any]]) -> bool:
         """Upload acc_product records"""
@@ -1982,17 +1914,7 @@ class SyncTool:
         else:
             print("❌ Failed to fetch acc_invmast data")
 
-        # Sync CashAndBankAccMaster
-        cashandbankaccmaster = self.db_connector.fetch_cashandbankaccmaster()
-        if cashandbankaccmaster:
-            print(f"📊 Found {len(cashandbankaccmaster)} cashandbankaccmaster entries")
-            valid_cashandbankaccmaster = self.validate_cashandbankaccmaster_data(cashandbankaccmaster)
-            if valid_cashandbankaccmaster:
-                self.api_client.upload_cashandbankaccmaster(valid_cashandbankaccmaster)
-            else:
-                print("❌ No valid cashandbankaccmaster data")
-
-        # Sync acc_tt_servicemaster
+        
         acctt = self.db_connector.fetch_accttservicemaster()
         if acctt:
             print(f"📊 Found {len(acctt)} acc_tt_servicemaster rows")
@@ -2002,53 +1924,7 @@ class SyncTool:
             else:
                 print("❌ No valid acc_tt_servicemaster data")
 
-        # Sync Sales Today
-        sales_today = self.db_connector.fetch_sales_today()
-        if sales_today is not None:
-            if sales_today:
-                print(f"📊 Found {len(sales_today)} sales_today entries")
-                valid_sales_today = self.validate_sales_today_data(sales_today)
-                if valid_sales_today:
-                    self.api_client.upload_sales_today(valid_sales_today)
-                else:
-                    print("❌ No valid sales_today data")
-            else:
-                print("📊 Found 0 sales_today entries")
-        else:
-            print("❌ Failed to fetch sales_today data")
-
-        # Sync Purchase Today
-        purchase_today = self.db_connector.fetch_purchase_today()
-        if purchase_today is not None:
-            if purchase_today:
-                print(f"📊 Found {len(purchase_today)} purchase_today entries")
-                valid_purchase_today = self.validate_purchase_today_data(purchase_today)
-                if valid_purchase_today:
-                    self.api_client.upload_purchase_today(valid_purchase_today)
-                else:
-                    print("❌ No valid purchase_today data")
-            else:
-                print("📊 Found 0 purchase_today entries")
-        else:
-            print("❌ Failed to fetch purchase_today data")
-
-        # Sync Sales Daywise
-        sales_daywise = self.db_connector.fetch_sales_daywise()
-        if sales_daywise is not None:
-            if sales_daywise:
-                print(f"📊 Found {len(sales_daywise)} sales_daywise entries")
-                valid_sales_daywise = self.validate_sales_daywise_data(sales_daywise)
-                if valid_sales_daywise:
-                    self.api_client.upload_sales_daywise(valid_sales_daywise)
-                else:
-                    print("❌ No valid sales_daywise data")
-            else:
-                print("📊 Found 0 sales_daywise entries")
-        else:
-            print("❌ Failed to fetch sales_daywise data")
-
-        # NEW: Sync Product Tables
-        print("\n=== Syncing Product Tables ===")
+      
         
         # Sync acc_product
         acc_product = self.db_connector.fetch_acc_product()
