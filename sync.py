@@ -742,6 +742,7 @@ class DatabaseConnector:
         query = """
             SELECT goddownid, product, quantity, barcode 
             FROM dba.acc_goddownstock
+            WHERE quantity > 0
         """
         cursor.execute(query)
         columns = [c[0] for c in cursor.description]

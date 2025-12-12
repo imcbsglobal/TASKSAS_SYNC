@@ -1,4 +1,4 @@
-('C:\\Users\\thoma\\Desktop\\IMC\\TASK_WEB_APPLICATION\\TASKSAS_SYNC_TOOL\\build\\SyncTool\\PYZ-00.pyz',
+('C:\\Users\\thoma\\Desktop\\IMC\\TASK_WEB_APPLICATION\\TASKSAS_SYNC\\build\\SyncTool\\PYZ-00.pyz',
  [('__future__',
    'C:\\Users\\thoma\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\__future__.py',
    'PYMODULE'),
