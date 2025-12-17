@@ -290,69 +290,69 @@ class DatabaseConnector:
                     pass
 
 
-    def fetch_acc_invmast(self) -> Optional[List[Dict[str, Any]]]:
-        cursor = None
-        try:
-            cursor = self._cursor()
-            queries_to_try = [
-                """
-                SELECT
-                    inv.modeofpayment,
-                    inv.customerid,
-                    inv.invdate,
-                    inv.nettotal,
-                    inv.paid,
-                    inv.type || '-' || inv.billno AS bill_ref
-                FROM DBA.acc_invmast AS inv
-                INNER JOIN DBA.acc_master AS cust
-                    ON inv.customerid = cust.code
-                WHERE cust.super_code = 'DEBTO'
-                AND inv.paid < inv.nettotal
-                AND inv.modeofpayment = 'C'
-                """,
+    # def fetch_acc_invmast(self) -> Optional[List[Dict[str, Any]]]:
+    #     cursor = None
+    #     try:
+    #         cursor = self._cursor()
+    #         queries_to_try = [
+    #             """
+    #             SELECT
+    #                 inv.modeofpayment,
+    #                 inv.customerid,
+    #                 inv.invdate,
+    #                 inv.nettotal,
+    #                 inv.paid,
+    #                 inv.type || '-' || inv.billno AS bill_ref
+    #             FROM DBA.acc_invmast AS inv
+    #             INNER JOIN DBA.acc_master AS cust
+    #                 ON inv.customerid = cust.code
+    #             WHERE cust.super_code = 'DEBTO'
+    #             AND inv.paid < inv.nettotal
+    #             AND inv.modeofpayment = 'C'
+    #             """,
                 
-                """
-                SELECT
-                    inv.modeofpayment,
-                    inv.customerid,
-                    inv.invdate,
-                    inv.nettotal,
-                    inv.paid,
-                    CONCAT(inv.type, '-', inv.billno) AS bill_ref
-                FROM acc_invmast AS inv
-                INNER JOIN acc_master AS cust
-                    ON inv.customerid = cust.code
-                WHERE cust.super_code = 'DEBTO'
-                AND inv.paid < inv.nettotal
-                AND inv.modeofpayment = 'C'
-                """,
-            ]
+    #             """
+    #             SELECT
+    #                 inv.modeofpayment,
+    #                 inv.customerid,
+    #                 inv.invdate,
+    #                 inv.nettotal,
+    #                 inv.paid,
+    #                 CONCAT(inv.type, '-', inv.billno) AS bill_ref
+    #             FROM acc_invmast AS inv
+    #             INNER JOIN acc_master AS cust
+    #                 ON inv.customerid = cust.code
+    #             WHERE cust.super_code = 'DEBTO'
+    #             AND inv.paid < inv.nettotal
+    #             AND inv.modeofpayment = 'C'
+    #             """,
+    #         ]
             
-            for i, query in enumerate(queries_to_try, 1):
-                try:
-                    logging.info(f"Trying acc_invmast query variation {i}...")
-                    cursor.execute(query)
-                    columns = [column[0] for column in cursor.description]
-                    result = [dict(zip(columns, row)) for row in cursor.fetchall()]
-                    logging.info(f"✅ acc_invmast query variation {i} succeeded! Returned {len(result)} records")
-                    return result
-                except Exception as query_e:
-                    logging.error(f"❌ acc_invmast query variation {i} failed: {query_e}")
-                    continue
+    #         for i, query in enumerate(queries_to_try, 1):
+    #             try:
+    #                 logging.info(f"Trying acc_invmast query variation {i}...")
+    #                 cursor.execute(query)
+    #                 columns = [column[0] for column in cursor.description]
+    #                 result = [dict(zip(columns, row)) for row in cursor.fetchall()]
+    #                 logging.info(f"✅ acc_invmast query variation {i} succeeded! Returned {len(result)} records")
+    #                 return result
+    #             except Exception as query_e:
+    #                 logging.error(f"❌ acc_invmast query variation {i} failed: {query_e}")
+    #                 continue
             
-            logging.error("❌ All acc_invmast query variations failed. Returning empty list.")
-            return []
+    #         logging.error("❌ All acc_invmast query variations failed. Returning empty list.")
+    #         return []
             
-        except Exception as e:
-            logging.error(f"❌ Failed fetching acc_invmast: {e}")
-            logging.error(traceback.format_exc())
-            return None
-        finally:
-            if cursor:
-                try:
-                    cursor.close()
-                except Exception:
-                    pass
+    #     except Exception as e:
+    #         logging.error(f"❌ Failed fetching acc_invmast: {e}")
+    #         logging.error(traceback.format_exc())
+    #         return None
+    #     finally:
+    #         if cursor:
+    #             try:
+    #                 cursor.close()
+    #             except Exception:
+    #                 pass
 
     def fetch_cashandbankaccmaster(self) -> Optional[List[Dict[str, Any]]]:
         cursor = None
@@ -607,23 +607,27 @@ class DatabaseConnector:
         try:
             cursor = self._cursor()
             query = """
-                SELECT 
-                    productcode,
-                    salesprice,
-                    secondprice,
-                    thirdprice,
-                    fourthprice,
-                    nlc1,
-                    quantity,
-                    barcode,
-                    bmrp,
-                    cost,
-                    expirydate,
-                    modified,
-                    modifiedtime,
-                    settings
-                FROM dba.acc_productbatch
-            """
+            SELECT
+                b.productcode,
+                b.salesprice,
+                b.secondprice,
+                b.thirdprice,
+                b.fourthprice,
+                b.nlc1,
+                b.quantity,
+                b.barcode,
+                b.bmrp,
+                b.cost,
+                b.expirydate,
+                b.modified,
+                b.modifiedtime,
+                b.settings
+            FROM DBA.acc_productbatch b
+            INNER JOIN DBA.acc_product p
+                ON TRIM(p.code) = TRIM(b.productcode)
+            WHERE TRIM(p.defected) = 'O'
+        """
+
             logging.info("Executing acc_productbatch query...")
             cursor.execute(query)
             columns = [column[0] for column in cursor.description]
@@ -779,7 +783,7 @@ class WebAPIClient:
     ENDPOINT_MISEL = "/upload-misel/"
     ENDPOINT_ACC_MASTER = "/upload-acc-master/"
     ENDPOINT_ACC_LEDGERS = "/upload-acc-ledgers/"
-    ENDPOINT_ACC_INVMAST = "/upload-acc-invmast/"
+    # ENDPOINT_ACC_INVMAST = "/upload-acc-invmast/"
     ENDPOINT_ACC_TT_SERVICE = "/upload-accttservicemaster/"
     ENDPOINT_ACC_PRODUCT = "/upload-acc-product/"
     ENDPOINT_ACC_PRODUCTBATCH = "/upload-acc-productbatch/"
@@ -884,7 +888,7 @@ class WebAPIClient:
         endpoint_map = {
             'acc_master': self.ENDPOINT_ACC_MASTER,
             'acc_ledgers': self.ENDPOINT_ACC_LEDGERS,
-            'acc_invmast': self.ENDPOINT_ACC_INVMAST
+            # 'acc_invmast': self.ENDPOINT_ACC_INVMAST
         }
         
         endpoint = endpoint_map.get(table_name, self.ENDPOINT_ACC_MASTER)
@@ -943,7 +947,7 @@ class WebAPIClient:
         
         endpoint_map = {
             'acc_ledgers': self.ENDPOINT_ACC_LEDGERS,
-            'acc_invmast': self.ENDPOINT_ACC_INVMAST
+            # 'acc_invmast': self.ENDPOINT_ACC_INVMAST
         }
         
         endpoint = endpoint_map.get(endpoint_key, f"/upload-{endpoint_key}/")
@@ -993,27 +997,27 @@ class WebAPIClient:
     def upload_acc_ledgers(self, acc_ledgers: List[Dict[str, Any]]) -> bool:
         return self._upload_in_batches('acc_ledgers', acc_ledgers, self.config.large_table_batch_size)
 
-    def upload_acc_invmast(self, acc_invmast: List[Dict[str, Any]]) -> bool:
-        if not acc_invmast:
-            logging.warning("No acc_invmast data to upload")
-            return True
+    # def upload_acc_invmast(self, acc_invmast: List[Dict[str, Any]]) -> bool:
+    #     if not acc_invmast:
+    #         logging.warning("No acc_invmast data to upload")
+    #         return True
         
-        if len(acc_invmast) > 1000:
-            logging.info(f"📦 Large dataset detected ({len(acc_invmast)} records). Using batch upload...") 
-            return self._upload_in_batches_with_clear('acc_invmast', acc_invmast, batch_size=500)
+    #     if len(acc_invmast) > 1000:
+    #         logging.info(f"📦 Large dataset detected ({len(acc_invmast)} records). Using batch upload...") 
+    #         return self._upload_in_batches_with_clear('acc_invmast', acc_invmast, batch_size=500)
         
-        url = f"{self.config.api_base_url}{self.ENDPOINT_ACC_INVMAST}?client_id={self.config.client_id}"
-        try:
-            res = self.session.post(url, json=acc_invmast, timeout=120)
-            if res.status_code in [200, 201]:
-                logging.info("✅ AccInvmast uploaded successfully")
-                return True
-            else:
-                logging.error(f"❌ Upload failed: {res.status_code} - {res.text}")
-                return False
-        except Exception as e:
-            logging.error(f"❌ Exception in upload_acc_invmast: {e}")
-            return False
+    #     url = f"{self.config.api_base_url}{self.ENDPOINT_ACC_INVMAST}?client_id={self.config.client_id}"
+    #     try:
+    #         res = self.session.post(url, json=acc_invmast, timeout=120)
+    #         if res.status_code in [200, 201]:
+    #             logging.info("✅ AccInvmast uploaded successfully")
+    #             return True
+    #         else:
+    #             logging.error(f"❌ Upload failed: {res.status_code} - {res.text}")
+    #             return False
+    #     except Exception as e:
+    #         logging.error(f"❌ Exception in upload_acc_invmast: {e}")
+    #         return False
 
     
 
@@ -1457,42 +1461,42 @@ class SyncTool:
         
         return valid
 
-    def validate_acc_invmast_data(self, acc_invmast: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        valid = []
-        for i, inv in enumerate(acc_invmast):
-            invdate = None
-            if inv.get('invdate'):
-                try:
-                    if hasattr(inv['invdate'], 'strftime'):
-                        invdate = inv['invdate'].strftime('%Y-%m-%d')
-                    else:
-                        invdate = str(inv['invdate'])
-                except Exception:
-                    invdate = None
+    # def validate_acc_invmast_data(self, acc_invmast: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    #     valid = []
+    #     for i, inv in enumerate(acc_invmast):
+    #         invdate = None
+    #         if inv.get('invdate'):
+    #             try:
+    #                 if hasattr(inv['invdate'], 'strftime'):
+    #                     invdate = inv['invdate'].strftime('%Y-%m-%d')
+    #                 else:
+    #                     invdate = str(inv['invdate'])
+    #             except Exception:
+    #                 invdate = None
             
-            nettotal = None
-            paid = None
-            try:
-                if inv.get('nettotal') is not None:
-                    nettotal = float(inv['nettotal'])
-            except (ValueError, TypeError):
-                nettotal = None
+    #         nettotal = None
+    #         paid = None
+    #         try:
+    #             if inv.get('nettotal') is not None:
+    #                 nettotal = float(inv['nettotal'])
+    #         except (ValueError, TypeError):
+    #             nettotal = None
                 
-            try:
-                if inv.get('paid') is not None:
-                    paid = float(inv['paid'])
-            except (ValueError, TypeError):
-                paid = None
+    #         try:
+    #             if inv.get('paid') is not None:
+    #                 paid = float(inv['paid'])
+    #         except (ValueError, TypeError):
+    #             paid = None
             
-            valid.append({
-                'modeofpayment': inv.get('modeofpayment', ''),
-                'customerid': inv.get('customerid', ''),
-                'invdate': invdate,
-                'nettotal': nettotal,
-                'paid': paid,
-                'bill_ref': inv.get('bill_ref', '')
-            })
-        return valid
+    #         valid.append({
+    #             'modeofpayment': inv.get('modeofpayment', ''),
+    #             'customerid': inv.get('customerid', ''),
+    #             'invdate': invdate,
+    #             'nettotal': nettotal,
+    #             'paid': paid,
+    #             'bill_ref': inv.get('bill_ref', '')
+    #         })
+    #     return valid
 
     def validate_cashandbankaccmaster_data(self, cashandbankaccmaster: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         valid = []
@@ -1910,19 +1914,19 @@ class SyncTool:
             print("❌ Failed to fetch acc_ledgers data")
 
         # Sync AccInvmast
-        acc_invmast = self.db_connector.fetch_acc_invmast()
-        if acc_invmast is not None:
-            if acc_invmast:
-                print(f"📊 Found {len(acc_invmast)} acc_invmast entries")
-                valid_acc_invmast = self.validate_acc_invmast_data(acc_invmast)
-                if valid_acc_invmast:
-                    self.api_client.upload_acc_invmast(valid_acc_invmast)
-                else:
-                    print("❌ No valid acc_invmast data")
-            else:
-                print("📊 Found 0 acc_invmast entries")
-        else:
-            print("❌ Failed to fetch acc_invmast data")
+        # acc_invmast = self.db_connector.fetch_acc_invmast()
+        # if acc_invmast is not None:
+        #     if acc_invmast:
+        #         print(f"📊 Found {len(acc_invmast)} acc_invmast entries")
+        #         valid_acc_invmast = self.validate_acc_invmast_data(acc_invmast)
+        #         if valid_acc_invmast:
+        #             self.api_client.upload_acc_invmast(valid_acc_invmast)
+        #         else:
+        #             print("❌ No valid acc_invmast data")
+        #     else:
+        #         print("📊 Found 0 acc_invmast entries")
+        # else:
+        #     print("❌ Failed to fetch acc_invmast data")
 
         
         acctt = self.db_connector.fetch_accttservicemaster()

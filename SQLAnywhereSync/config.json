@@ -1,7 +1,7 @@
 
 {
   "database": {
-    "dsn": "ALFA",
+    "dsn": "TEAPOT",
     "username": "DBA",
     "password": "(*$^)"
   },
