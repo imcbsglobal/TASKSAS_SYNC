@@ -670,32 +670,42 @@ class DatabaseConnector:
                     pass
 
     def fetch_acc_productphoto(self) -> Optional[List[Dict[str, Any]]]:
-        """Fetch product photo records"""
+        """
+        Fetch product photo records
+        - Prefer url2
+        - Fallback to url if url2 is NULL
+        - Send data as 'url' (API unchanged)
+        """
         cursor = None
         try:
             cursor = self._cursor()
             query = """
                 SELECT 
                     code,
-                    url
+                    COALESCE(url2, url) AS url
                 FROM DBA.acc_productphoto
             """
-            logging.info("Executing acc_productphoto query...")
+            logging.info("Executing acc_productphoto query (url2 preferred, fallback to url)...")
             cursor.execute(query)
+
             columns = [column[0] for column in cursor.description]
             result = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
             logging.info(f"✅ Fetched {len(result)} acc_productphoto records")
             return result
+
         except Exception as e:
             logging.error(f"❌ Failed fetching acc_productphoto: {e}")
             logging.error(traceback.format_exc())
             return None
+
         finally:
             if cursor:
                 try:
                     cursor.close()
                 except Exception:
                     pass
+
 
     def fetch_acc_sales_types(self) -> Optional[List[Dict[str, Any]]]:
         cursor = None
