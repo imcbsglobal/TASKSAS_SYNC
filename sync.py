@@ -676,8 +676,8 @@ class DatabaseConnector:
     def fetch_acc_productphoto(self) -> Optional[List[Dict[str, Any]]]:
         """
         Fetch product photo records
-        - Prefer url2
-        - Fallback to url if url2 is NULL
+        - Use ONLY url2
+        - If url2 is NULL or empty → DO NOT fetch
         - Send data as 'url' (API unchanged)
         """
         cursor = None
@@ -686,16 +686,18 @@ class DatabaseConnector:
             query = """
                 SELECT 
                     code,
-                    COALESCE(url2, url) AS url
+                    url2 AS url
                 FROM DBA.acc_productphoto
+                WHERE url2 IS NOT NULL
+                AND TRIM(url2) <> ''
             """
-            logging.info("Executing acc_productphoto query (url2 preferred, fallback to url)...")
+            logging.info("Executing acc_productphoto query (url2 only, no empty values)...")
             cursor.execute(query)
 
             columns = [column[0] for column in cursor.description]
             result = [dict(zip(columns, row)) for row in cursor.fetchall()]
 
-            logging.info(f"✅ Fetched {len(result)} acc_productphoto records")
+            logging.info(f"✅ Fetched {len(result)} acc_productphoto records (url2 only)")
             return result
 
         except Exception as e:
@@ -709,6 +711,7 @@ class DatabaseConnector:
                     cursor.close()
                 except Exception:
                     pass
+
 
 
     def fetch_acc_sales_types(self) -> Optional[List[Dict[str, Any]]]:
